@@ -33,12 +33,34 @@ import {
   updatePlaybackStateInDb,
   updateProfilePreferences,
 } from './src/db/repository.ts';
+<<<<<<< HEAD
 import { optionalAuth, AuthenticatedRequest } from './src/middleware/auth.ts';
+=======
+import { getDatabaseTargetInfo, isDatabaseAvailable } from './src/db/index.ts';
+import { optionalAuth, AuthenticatedRequest } from './src/middleware/auth.ts';
+import {
+  checkCatalogHealth,
+  fetchFullNxshaCatalog,
+  getRecentDiagnostics,
+  getTmdbPopularMovies,
+  getTmdbPopularTv,
+  getTmdbTrending,
+  getTmdbTvSeasons,
+  normalizeNxshaCard,
+  normalizeTmdbItem,
+  searchNxsha,
+  searchTmdb,
+} from './src/services/catalogService.ts';
+>>>>>>> c3dee35 (fix(deps): resolve npm ERESOLVE peer dependency conflict for esbuild and vite 8)
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
 
+<<<<<<< HEAD
 const PORT = 3000;
+=======
+const PORT = Number(process.env.PORT || 3000);
+>>>>>>> c3dee35 (fix(deps): resolve npm ERESOLVE peer dependency conflict for esbuild and vite 8)
 
 function getAiClient(): GoogleGenAI | null {
   const apiKey = process.env.GEMINI_API_KEY;
@@ -270,6 +292,7 @@ const LANGUAGE_MAP: Record<string, string> = {
   pt: 'Portuguese',
 };
 
+<<<<<<< HEAD
 const PLATFORM_CYCLE: PlatformOrigin[] = [
   'Nxsha Originals',
   'Netflix',
@@ -617,6 +640,9 @@ async function fetchFullNxshaCatalog(forceRefresh = false): Promise<CatalogCache
 
   return catalogFetchInFlight;
 }
+=======
+
+>>>>>>> c3dee35 (fix(deps): resolve npm ERESOLVE peer dependency conflict for esbuild and vite 8)
 
 async function startServer() {
   const app = express();
@@ -629,10 +655,247 @@ async function startServer() {
     console.error('Initial DB seed warning:', err);
   });
 
+<<<<<<< HEAD
   // Pre-warm full Nxsha catalog on startup
   fetchFullNxshaCatalog().catch(() => {});
 
   // 1. Live nxsha.space full multi-section catalog discovery & pagination proxy
+=======
+  // Pre-warm full Nxsha & TMDB catalog on startup
+  fetchFullNxshaCatalog().catch(() => {});
+  getTmdbTrending(1).catch(() => {});
+
+  // 0. Catalog Health & Observability Endpoint (reports reachability & stats without exposing secrets)
+  app.get('/api/health/catalog', async (_req, res) => {
+    try {
+      const health = await checkCatalogHealth();
+      const dbTarget = getDatabaseTargetInfo();
+      res.json({
+        ...health,
+        database: {
+          available: isDatabaseAvailable(),
+          target: `${dbTarget.host}:${dbTarget.port}/${dbTarget.database}`,
+          user: dbTarget.user,
+          configured: dbTarget.isExplicitlyConfigured,
+          mode: isDatabaseAvailable() ? 'postgresql_cloud_sql' : 'in_memory_resilient_mode',
+        },
+        recentDiagnostics: getRecentDiagnostics().slice(-20),
+      });
+    } catch (e: any) {
+      res.status(500).json({
+        status: 'unreachable',
+        error: e?.message || 'Failed to check catalog health',
+      });
+    }
+  });
+
+  // 1A. Unified Multi-Provider Dynamic Catalog Feed
+  app.get('/api/catalog/feed', async (req, res) => {
+    const section = typeof req.query.section === 'string' ? req.query.section.toLowerCase() : 'all';
+    const tabKey = typeof req.query.tabKey === 'string' ? req.query.tabKey.toLowerCase() : 'all';
+    const page = Math.max(1, parseInt(String(req.query.page || '1'), 10) || 1);
+    const pageSize = Math.max(1, Math.min(100, parseInt(String(req.query.pageSize || '24'), 10) || 24));
+    const forceRefresh = req.query.refresh === 'true';
+
+    try {
+      if (section === 'trending') {
+        const result = await getTmdbTrending(page);
+        res.json({
+          source: 'TMDB Official Trending (Weekly)',
+          liveConnected: result.ok,
+          page: result.page,
+          pageSize,
+          totalPages: result.totalPages,
+          totalCount: result.totalResults,
+          hasMore: result.page < result.totalPages,
+          items: result.items,
+        });
+        return;
+      }
+
+      if (section === 'popular-movies' || tabKey === 'movie' || tabKey === 'movies') {
+        const result = await getTmdbPopularMovies(page);
+        res.json({
+          source: 'TMDB Official Popular Movies',
+          liveConnected: result.ok,
+          page: result.page,
+          pageSize,
+          totalPages: result.totalPages,
+          totalCount: result.totalResults,
+          hasMore: result.page < result.totalPages,
+          items: result.items,
+        });
+        return;
+      }
+
+      if (section === 'popular-tv' || tabKey === 'tv') {
+        const result = await getTmdbPopularTv(page);
+        res.json({
+          source: 'TMDB Official Popular TV Series',
+          liveConnected: result.ok,
+          page: result.page,
+          pageSize,
+          totalPages: result.totalPages,
+          totalCount: result.totalResults,
+          hasMore: result.page < result.totalPages,
+          items: result.items,
+        });
+        return;
+      }
+
+      // Default 'all': unified catalog combining TMDB trending + Nxsha multi-section feed + Studio catalog
+      const [tmdbTrending, nxshaState] = await Promise.all([
+        getTmdbTrending(page).catch(() => ({ items: [], page: 1, totalPages: 1, totalResults: 0, ok: false })),
+        fetchFullNxshaCatalog(forceRefresh).catch(() => ({ items: [], byTab: {}, sections: [], liveConnected: false, updatedAt: Date.now() })),
+      ]);
+
+      const poolMap = new Map<string, MediaItem>();
+      // 1. Studio titles
+      for (const item of INITIAL_CATALOG) {
+        poolMap.set(`${item.mediaType}:${item.tmdbId}`, item);
+      }
+      // 2. TMDB items
+      for (const item of tmdbTrending.items) {
+        const key = `${item.mediaType}:${item.tmdbId}`;
+        const existing = poolMap.get(key);
+        if (existing) {
+          poolMap.set(key, { ...item, streamUrl: existing.streamUrl, playbackStatus: existing.playbackStatus });
+        } else {
+          poolMap.set(key, item);
+        }
+      }
+      // 3. Nxsha items
+      for (const item of nxshaState.items) {
+        const key = `${item.mediaType}:${item.tmdbId}`;
+        const existing = poolMap.get(key);
+        if (existing) {
+          poolMap.set(key, {
+            ...existing,
+            posterUrl: existing.posterUrl || item.posterUrl,
+            backdropUrl: existing.backdropUrl || item.backdropUrl,
+            nxshaEmbedUrl: item.nxshaEmbedUrl || existing.nxshaEmbedUrl,
+            nxshaWatchUrl: item.nxshaWatchUrl || existing.nxshaWatchUrl,
+          });
+        } else {
+          poolMap.set(key, item);
+        }
+      }
+
+      let allItems = Array.from(poolMap.values());
+      if (tabKey === 'anime') {
+        allItems = allItems.filter((i) => i.mediaType === 'anime');
+      }
+
+      const totalCount = allItems.length;
+      const totalPages = Math.max(1, Math.ceil(totalCount / pageSize));
+      const startIdx = (page - 1) * pageSize;
+      const pagedItems = allItems.slice(startIdx, startIdx + pageSize);
+
+      res.json({
+        source: 'CineTogether Unified Live Catalog (TMDB + Nxsha + Studio)',
+        liveConnected: tmdbTrending.ok || nxshaState.liveConnected,
+        isDemoFallback: !tmdbTrending.ok && !nxshaState.liveConnected,
+        totalCount,
+        totalCatalogSize: totalCount,
+        page,
+        pageSize,
+        totalPages,
+        hasMore: startIdx + pageSize < totalCount,
+        sections: nxshaState.sections || [],
+        items: pagedItems,
+      });
+    } catch {
+      res.json({
+        source: 'Curated Demo & TMDB Metadata Snapshot',
+        liveConnected: false,
+        isDemoFallback: true,
+        totalCount: INITIAL_CATALOG.length,
+        totalCatalogSize: INITIAL_CATALOG.length,
+        page: 1,
+        pageSize,
+        totalPages: 1,
+        hasMore: false,
+        sections: [],
+        items: INITIAL_CATALOG,
+      });
+    }
+  });
+
+  // 1B. Server-backed Multi-Provider Search Endpoint
+  app.get('/api/catalog/search', async (req, res) => {
+    const query = typeof req.query.q === 'string' ? req.query.q.trim() : '';
+    const type = typeof req.query.type === 'string' ? (req.query.type.toLowerCase() as 'all' | 'movie' | 'tv') : 'all';
+    const page = Math.max(1, parseInt(String(req.query.page || '1'), 10) || 1);
+
+    if (!query) {
+      res.json({
+        query: '',
+        liveSearchUsed: true,
+        page: 1,
+        totalPages: 1,
+        totalResults: 0,
+        providers: [],
+        items: [],
+      });
+      return;
+    }
+
+    try {
+      const [tmdbSearch, nxshaHits] = await Promise.all([
+        searchTmdb(query, type, page).catch(() => ({ items: [], page: 1, totalPages: 0, totalResults: 0, ok: false })),
+        searchNxsha(query).catch(() => []),
+      ]);
+
+      const combinedMap = new Map<string, MediaItem>();
+      // Put TMDB items first (rich metadata, high-res posters)
+      for (const item of tmdbSearch.items) {
+        const key = `${item.mediaType}:${item.tmdbId}`;
+        combinedMap.set(key, item);
+      }
+      // Merge Nxsha hits (adds embed URLs & unindexed titles)
+      for (const item of nxshaHits) {
+        const key = `${item.mediaType}:${item.tmdbId}`;
+        const existing = combinedMap.get(key);
+        if (existing) {
+          combinedMap.set(key, {
+            ...existing,
+            nxshaEmbedUrl: item.nxshaEmbedUrl || existing.nxshaEmbedUrl,
+            nxshaWatchUrl: item.nxshaWatchUrl || existing.nxshaWatchUrl,
+          });
+        } else {
+          combinedMap.set(key, item);
+        }
+      }
+
+      const items = Array.from(combinedMap.values());
+      const providers: string[] = [];
+      if (tmdbSearch.ok && tmdbSearch.items.length > 0) providers.push('tmdb');
+      if (nxshaHits.length > 0) providers.push('nxsha');
+
+      res.json({
+        query,
+        liveSearchUsed: providers.length > 0,
+        page,
+        totalPages: Math.max(1, tmdbSearch.totalPages || 1),
+        totalResults: items.length,
+        providers,
+        items,
+      });
+    } catch {
+      res.json({
+        query,
+        liveSearchUsed: false,
+        page: 1,
+        totalPages: 1,
+        totalResults: 0,
+        providers: [],
+        items: [],
+      });
+    }
+  });
+
+  // 1C. Live nxsha.space full multi-section catalog discovery proxy (enhanced with fetchedSections)
+>>>>>>> c3dee35 (fix(deps): resolve npm ERESOLVE peer dependency conflict for esbuild and vite 8)
   app.get('/api/nxsha/feed', async (req, res) => {
     const tabKey = typeof req.query.tabKey === 'string' ? req.query.tabKey.toLowerCase() : 'all';
     const forceRefresh = req.query.refresh === 'true';
@@ -641,6 +904,7 @@ async function startServer() {
 
     try {
       const state = await fetchFullNxshaCatalog(forceRefresh);
+<<<<<<< HEAD
       let pool = state.items;
       if (tabKey === 'movie' || tabKey === 'movies') {
         pool = state.items.filter((i) => i.mediaType === 'movie');
@@ -648,6 +912,15 @@ async function startServer() {
         pool = state.items.filter((i) => i.mediaType === 'tv');
       } else if (tabKey === 'anime') {
         pool = state.items.filter((i) => i.mediaType === 'anime');
+=======
+      let pool: MediaItem[] = state.items;
+      if (tabKey === 'movie' || tabKey === 'movies') {
+        pool = state.items.filter((i: MediaItem) => i.mediaType === 'movie');
+      } else if (tabKey === 'tv') {
+        pool = state.items.filter((i: MediaItem) => i.mediaType === 'tv');
+      } else if (tabKey === 'anime') {
+        pool = state.items.filter((i: MediaItem) => i.mediaType === 'anime');
+>>>>>>> c3dee35 (fix(deps): resolve npm ERESOLVE peer dependency conflict for esbuild and vite 8)
       }
 
       const startIdx = (page - 1) * pageSize;
@@ -683,7 +956,11 @@ async function startServer() {
     }
   });
 
+<<<<<<< HEAD
   // 1B. Live Global Catalog Search via nxsha.space/api/search-suggestions + cached catalog
+=======
+  // 1D. Live Global Catalog Search via TMDB + Nxsha suggestions
+>>>>>>> c3dee35 (fix(deps): resolve npm ERESOLVE peer dependency conflict for esbuild and vite 8)
   app.get('/api/nxsha/search', async (req, res) => {
     const query = typeof req.query.q === 'string' ? req.query.q.trim() : '';
     if (!query) {
@@ -698,6 +975,7 @@ async function startServer() {
     }
 
     try {
+<<<<<<< HEAD
       const state = await fetchFullNxshaCatalog();
       const qLower = query.toLowerCase();
 
@@ -776,13 +1054,39 @@ async function startServer() {
                 ? existing.description
                 : item.description,
           });
+=======
+      const [tmdbSearch, nxshaHits] = await Promise.all([
+        searchTmdb(query, 'all', 1).catch(() => ({ items: [], page: 1, totalPages: 0, totalResults: 0, ok: false })),
+        searchNxsha(query).catch(() => []),
+      ]);
+
+      const combinedMap = new Map<string, MediaItem>();
+      for (const item of tmdbSearch.items) {
+        combinedMap.set(`${item.mediaType}:${item.tmdbId}`, item);
+      }
+      for (const item of nxshaHits) {
+        const key = `${item.mediaType}:${item.tmdbId}`;
+        const existing = combinedMap.get(key);
+        if (existing) {
+          combinedMap.set(key, {
+            ...existing,
+            nxshaEmbedUrl: item.nxshaEmbedUrl || existing.nxshaEmbedUrl,
+            nxshaWatchUrl: item.nxshaWatchUrl || existing.nxshaWatchUrl,
+          });
+        } else {
+          combinedMap.set(key, item);
+>>>>>>> c3dee35 (fix(deps): resolve npm ERESOLVE peer dependency conflict for esbuild and vite 8)
         }
       }
 
       const finalResults = Array.from(combinedMap.values());
       res.json({
         query,
+<<<<<<< HEAD
         liveSearchUsed: liveSearchOk,
+=======
+        liveSearchUsed: tmdbSearch.ok || nxshaHits.length > 0,
+>>>>>>> c3dee35 (fix(deps): resolve npm ERESOLVE peer dependency conflict for esbuild and vite 8)
         totalResults: finalResults.length,
         items: finalResults,
       });
@@ -796,6 +1100,7 @@ async function startServer() {
     }
   });
 
+<<<<<<< HEAD
   // 1C. Dynamic TV Series Seasons & Episodes Resolver
   app.get('/api/nxsha/tv/:tmdbId/seasons', async (req, res) => {
     const tmdbId = parseInt(String(req.params.tmdbId || '0'), 10) || 204988;
@@ -871,6 +1176,30 @@ async function startServer() {
 
     // 2. Query public TVMaze Episode Index by title for real episode titles, air dates, and synopses
     const cachedItem = catalogCache?.items.find((i) => i.tmdbId === tmdbId);
+=======
+  // 1E. Dynamic TV Series Seasons & Episodes Resolver with TMDB & TVMaze
+  app.get(['/api/nxsha/tv/:tmdbId/seasons', '/api/tmdb/tv/:tmdbId/seasons'], async (req, res) => {
+    const tmdbId = parseInt(String(req.params.tmdbId || '0'), 10) || 204988;
+    const titleQuery = typeof req.query.title === 'string' ? req.query.title.trim() : '';
+
+    // 1. Fetch official TMDB season/episode metadata with retry & Bearer/API key support
+    try {
+      const tmdbSeasonResult = await getTmdbTvSeasons(tmdbId, titleQuery);
+      if (tmdbSeasonResult.ok && tmdbSeasonResult.seasons.length > 0) {
+        res.json({
+          tmdbId,
+          source: tmdbSeasonResult.source,
+          seasons: tmdbSeasonResult.seasons,
+        });
+        return;
+      }
+    } catch {
+      // Fall through to TVMaze / deterministic episodic index
+    }
+
+    // 2. Query public TVMaze Episode Index by title for real episode titles, air dates, and synopses
+    const cachedItem = INITIAL_CATALOG.find((i: MediaItem) => i.tmdbId === tmdbId);
+>>>>>>> c3dee35 (fix(deps): resolve npm ERESOLVE peer dependency conflict for esbuild and vite 8)
     const lookupTitle = titleQuery || cachedItem?.title || '';
 
     if (lookupTitle) {
@@ -1937,7 +2266,11 @@ Curate a 3-step viewing itinerary from the CineTogether catalog.`,
       server: {
         middlewareMode: true,
         allowedHosts: true,
+<<<<<<< HEAD
         hmr: process.env.DISABLE_HMR === 'true' ? false : { server },
+=======
+        hmr: process.env.DISABLE_HMR === 'true' ? false : undefined,
+>>>>>>> c3dee35 (fix(deps): resolve npm ERESOLVE peer dependency conflict for esbuild and vite 8)
         ws: { server },
         watch: process.env.DISABLE_HMR === 'true' ? null : {},
       },
@@ -1952,6 +2285,25 @@ Curate a 3-step viewing itinerary from the CineTogether catalog.`,
     });
   }
 
+<<<<<<< HEAD
+=======
+  server.on('error', (err: NodeJS.ErrnoException) => {
+    if (err.code === 'EADDRINUSE') {
+      console.error(
+        `\n[STARTUP ERROR] Port ${PORT} is already in use by another process (EADDRINUSE).\n` +
+        `Another CineTogether instance or background server is currently running on port ${PORT}.\n` +
+        `To resolve this:\n` +
+        `  1. Terminate the process using port ${PORT} (e.g. check 'lsof -i :${PORT}'), or\n` +
+        `  2. Launch CineTogether on another port: PORT=${PORT === 3000 ? 3001 : PORT + 1} npm run dev\n`
+      );
+      process.exit(1);
+    } else {
+      console.error('[STARTUP ERROR] HTTP Server error:', err);
+      process.exit(1);
+    }
+  });
+
+>>>>>>> c3dee35 (fix(deps): resolve npm ERESOLVE peer dependency conflict for esbuild and vite 8)
   server.listen(PORT, '0.0.0.0', () => {
     console.log(`CineTogether server listening on http://0.0.0.0:${PORT}`);
   });
