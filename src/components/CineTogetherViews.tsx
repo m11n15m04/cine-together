@@ -5,6 +5,7 @@ import {
   Check,
   ExternalLink,
   Film,
+  HardDrive,
   Heart,
   KeyRound,
   Lock,
@@ -13,8 +14,11 @@ import {
   Palette,
   Play,
   Plus,
+  Share2,
+  ShieldCheck,
   Sparkles,
   Star,
+  Trash2,
   Tv,
   UserCheck,
   Users,
@@ -26,6 +30,7 @@ import {
   MediaItem,
   RoomMode,
   RoomThemeId,
+  SecurityPrivacySettings,
   TvEpisodeItem,
   TvSeasonDetail,
   UserProfile,
@@ -537,6 +542,22 @@ export const MediaDetailView: React.FC<MediaDetailViewProps> = ({
   const [selectedEpisodeNum, setSelectedEpisodeNum] = useState<number>(1);
   const [episodesLoading, setEpisodesLoading] = useState<boolean>(false);
   const [episodeSourceLabel, setEpisodeSourceLabel] = useState<string>('');
+  const [copiedShare, setCopiedShare] = useState<boolean>(false);
+
+  const handleShare = () => {
+    const shareUrl = window.location.href;
+    if (navigator.share) {
+      navigator.share({
+        title: item.title,
+        text: `Watch ${item.title} (${item.year}) on CineTogether!`,
+        url: shareUrl,
+      }).catch(() => {});
+    } else {
+      navigator.clipboard.writeText(shareUrl);
+      setCopiedShare(true);
+      setTimeout(() => setCopiedShare(false), 2500);
+    }
+  };
 
   useEffect(() => {
     if (!isEpisodic) {
@@ -604,7 +625,13 @@ export const MediaDetailView: React.FC<MediaDetailViewProps> = ({
           <div className="absolute inset-0 bg-gradient-to-r from-slate-950 via-slate-950/85 to-transparent" />
         </div>
 
-        <div className="p-6 sm:p-10 relative -mt-36 sm:-mt-48 z-10 max-w-3xl space-y-5">
+        <div className="p-6 sm:p-10 relative -mt-36 sm:-mt-48 z-10 flex flex-col md:flex-row items-start gap-8">
+          {/* Vertical Poster Card */}
+          <div className="w-44 sm:w-56 shrink-0 aspect-[2/3] rounded-2xl overflow-hidden shadow-2xl border-2 border-white/10 bg-slate-950 hidden sm:block">
+            <MediaPoster item={item} variant="poster" className="w-full h-full object-cover" />
+          </div>
+
+          <div className="flex-1 max-w-3xl space-y-5 min-w-0">
           <div className="flex flex-wrap items-center gap-2 text-xs font-mono">
             <span className="px-2.5 py-1 rounded-md bg-violet-500/20 text-violet-300 border border-violet-500/30 font-semibold">
               {item.platform}
@@ -626,6 +653,21 @@ export const MediaDetailView: React.FC<MediaDetailViewProps> = ({
             {item.coupleScore && (
               <span className="px-2.5 py-0.5 rounded-full bg-rose-500/20 text-rose-300 border border-rose-500/30">
                 ❤️ {item.coupleScore}% Couple Match
+              </span>
+            )}
+            {item.sourceAvailability === 'verified' || item.playbackStatus === 'synced-ready' ? (
+              <span className="px-2.5 py-0.5 rounded-full bg-emerald-500/20 text-emerald-300 border border-emerald-500/30 font-semibold text-[11px] inline-flex items-center gap-1">
+                <span className="w-1.5 h-1.5 rounded-full bg-emerald-400 animate-pulse" />
+                Verified Playback Source
+              </span>
+            ) : item.playbackType === 'embed-only' || item.playbackStatus === 'embed-only' ? (
+              <span className="px-2.5 py-0.5 rounded-full bg-amber-500/20 text-amber-300 border border-amber-500/30 text-[11px] inline-flex items-center gap-1">
+                <ExternalLink className="w-3 h-3" />
+                External Embed Stream
+              </span>
+            ) : (
+              <span className="px-2.5 py-0.5 rounded-full bg-rose-500/20 text-rose-300 border border-rose-500/30 text-[11px] inline-flex items-center gap-1">
+                Theatrical / Metadata Only (No Stream)
               </span>
             )}
           </div>
@@ -662,14 +704,24 @@ export const MediaDetailView: React.FC<MediaDetailViewProps> = ({
           <div className="flex flex-wrap items-center gap-3 pt-2">
             <button
               type="button"
-              onClick={() =>
-                onWatchSolo(buildEpisodicMediaItem(selectedSeasonNum, selectedEpisodeNum))
-              }
-              className="inline-flex items-center gap-2 px-5 py-3 rounded-xl bg-white hover:bg-slate-200 text-slate-950 font-semibold text-xs sm:text-sm transition-colors shadow-lg"
+              disabled={item.sourceAvailability === 'unavailable' || item.playbackStatus === 'metadata-only'}
+              onClick={() => {
+                if (item.sourceAvailability === 'unavailable' || item.playbackStatus === 'metadata-only') {
+                  return;
+                }
+                onWatchSolo(buildEpisodicMediaItem(selectedSeasonNum, selectedEpisodeNum));
+              }}
+              className={`inline-flex items-center gap-2 px-5 py-3 rounded-xl font-semibold text-xs sm:text-sm transition-colors shadow-lg ${
+                item.sourceAvailability === 'unavailable' || item.playbackStatus === 'metadata-only'
+                  ? 'bg-slate-800 text-slate-500 cursor-not-allowed border border-slate-700'
+                  : 'bg-white hover:bg-slate-200 text-slate-950'
+              }`}
             >
               <Play className="w-4 h-4 fill-current" />
               <span>
-                {isEpisodic
+                {item.sourceAvailability === 'unavailable' || item.playbackStatus === 'metadata-only'
+                  ? 'Stream Unavailable (Theatrical Only)'
+                  : isEpisodic
                   ? `Watch S${selectedSeasonNum}·E${selectedEpisodeNum} Now`
                   : 'Watch Solo Now'}
               </span>
@@ -719,6 +771,25 @@ export const MediaDetailView: React.FC<MediaDetailViewProps> = ({
               )}
             </button>
 
+            <button
+              type="button"
+              onClick={handleShare}
+              className="inline-flex items-center gap-2 px-4 py-3 rounded-xl text-xs sm:text-sm font-medium bg-slate-900 border border-slate-700 text-slate-200 hover:border-slate-500 transition-colors"
+              title="Share Title"
+            >
+              {copiedShare ? (
+                <>
+                  <Check className="w-4 h-4 text-emerald-400" />
+                  <span className="text-emerald-300">Link Copied!</span>
+                </>
+              ) : (
+                <>
+                  <Share2 className="w-4 h-4 text-violet-400" />
+                  <span>Share</span>
+                </>
+              )}
+            </button>
+
             <a
               href={
                 isEpisodic
@@ -732,6 +803,7 @@ export const MediaDetailView: React.FC<MediaDetailViewProps> = ({
               <ExternalLink className="w-3.5 h-3.5" />
               <span>Open on Nxsha</span>
             </a>
+          </div>
           </div>
         </div>
       </div>
@@ -911,21 +983,40 @@ export const MediaDetailView: React.FC<MediaDetailViewProps> = ({
 interface ProfileAndAuthViewProps {
   userProfile: UserProfile;
   watchlistItems: MediaItem[];
+  securitySettings?: SecurityPrivacySettings;
+  onUpdateSecurity?: (next: SecurityPrivacySettings) => void;
   onUpdateProfile: (next: UserProfile) => void;
   onSelectMedia: (item: MediaItem) => void;
+  onNavigateToTab?: (tab: 'home' | 'movies' | 'tv' | 'create-party' | 'couple-room' | 'group-room' | 'ai-voice' | 'offline-social') => void;
 }
 
 export const ProfileAndAuthView: React.FC<ProfileAndAuthViewProps> = ({
   userProfile,
   watchlistItems,
+  securitySettings,
+  onUpdateSecurity,
   onUpdateProfile,
   onSelectMedia,
+  onNavigateToTab,
 }) => {
+  const [activeSubTab, setActiveSubTab] = useState<'profile' | 'security' | 'watchlist'>('profile');
   const [displayName, setDisplayName] = useState<string>(userProfile.displayName);
   const [email, setEmail] = useState<string>(userProfile.email);
   const [preferredTheme, setPreferredTheme] = useState<RoomThemeId>(userProfile.preferredTheme);
   const [savedNotice, setSavedNotice] = useState<string | null>(null);
   const [authError, setAuthError] = useState<string | null>(null);
+
+  // Local copy of security settings if prop provided
+  const [localSec, setLocalSec] = useState<SecurityPrivacySettings>(
+    securitySettings || {
+      e2eHistoryEncryption: true,
+      incognitoSession: false,
+      drmWatermarkProtection: true,
+      strictCoupleRoomPin: '7749',
+      autoClearCacheHours: 24,
+      dnsOverHttpsSource: true,
+    }
+  );
 
   const handleSavePreferences = async (e: React.FormEvent) => {
     e.preventDefault();
@@ -948,6 +1039,14 @@ export const ProfileAndAuthView: React.FC<ProfileAndAuthViewProps> = ({
     }
     setSavedNotice('Profile & Cinema Theme saved to Cloud SQL.');
     setTimeout(() => setSavedNotice(null), 3000);
+  };
+
+  const handleUpdateSecSetting = (key: keyof SecurityPrivacySettings, val: any) => {
+    const next = { ...localSec, [key]: val };
+    setLocalSec(next);
+    onUpdateSecurity?.(next);
+    setSavedNotice('Security preferences updated.');
+    setTimeout(() => setSavedNotice(null), 2500);
   };
 
   const handleGoogleSignIn = async () => {
@@ -992,12 +1091,15 @@ export const ProfileAndAuthView: React.FC<ProfileAndAuthViewProps> = ({
     onUpdateProfile(guestProfile);
   };
 
+  const currentThemeMeta = ROOM_THEMES[preferredTheme] || ROOM_THEMES['rose-nebula'];
+
   return (
-    <section className="space-y-8 max-w-4xl mx-auto" aria-label="Profile and Authentication">
+    <section className="space-y-8 max-w-4xl mx-auto" aria-label="Profile, Authentication and Settings">
+      {/* Profile Header & Stats */}
       <div className="p-6 sm:p-8 rounded-3xl bg-slate-900 border border-slate-800 space-y-6">
         <div className="flex flex-wrap items-center justify-between gap-4 border-b border-slate-800 pb-5">
           <div className="flex items-center gap-4">
-            <div className="w-14 h-14 rounded-2xl bg-gradient-to-br from-violet-600 to-fuchsia-600 flex items-center justify-center text-white font-display font-bold text-xl shadow-lg">
+            <div className="w-14 h-14 rounded-2xl bg-gradient-to-br from-violet-600 to-fuchsia-600 flex items-center justify-center text-white font-display font-bold text-xl shadow-lg ring-2 ring-violet-500/30">
               {userProfile.displayName.charAt(0).toUpperCase()}
             </div>
             <div>
@@ -1009,7 +1111,7 @@ export const ProfileAndAuthView: React.FC<ProfileAndAuthViewProps> = ({
                   {userProfile.isGuest ? 'Guest Pass Active' : 'Verified Account'}
                 </span>
               </div>
-              <p className="text-xs text-slate-400 font-mono">{userProfile.email}</p>
+              <p className="text-xs text-slate-400 font-mono mt-0.5">{userProfile.email}</p>
             </div>
           </div>
 
@@ -1018,7 +1120,7 @@ export const ProfileAndAuthView: React.FC<ProfileAndAuthViewProps> = ({
               <button
                 type="button"
                 onClick={handleGoogleSignIn}
-                className="inline-flex items-center gap-2 px-4 py-2.5 rounded-xl bg-white hover:bg-slate-200 text-slate-950 font-semibold text-xs transition-colors"
+                className="inline-flex items-center gap-2 px-4 py-2.5 rounded-xl bg-white hover:bg-slate-200 text-slate-950 font-semibold text-xs transition-colors shadow-md"
               >
                 <LogIn className="w-4 h-4" />
                 <span>Sign In with Google</span>
@@ -1037,74 +1139,282 @@ export const ProfileAndAuthView: React.FC<ProfileAndAuthViewProps> = ({
         </div>
 
         {authError && (
-          <div className="p-3 rounded-xl bg-amber-500/10 border border-amber-500/30 text-xs text-amber-200">
+          <div className="p-3.5 rounded-2xl bg-amber-500/10 border border-amber-500/30 text-xs text-amber-200">
             {authError}
           </div>
         )}
 
-        <form onSubmit={handleSavePreferences} className="space-y-4">
-          <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
-            <div className="space-y-1.5">
-              <label htmlFor="profile-name" className="block text-xs font-medium text-slate-300">
-                Display Name in Watch Rooms
-              </label>
-              <input
-                id="profile-name"
-                type="text"
-                value={displayName}
-                onChange={(e) => setDisplayName(e.target.value)}
-                className="w-full px-3.5 py-2.5 text-sm bg-slate-950 border border-slate-800 rounded-xl text-white"
-              />
+        {/* Quick Navigation Tabs: Profile | Security Settings | My Watchlist */}
+        <div className="flex items-center gap-2 border-b border-slate-800/80 pb-3" role="tablist">
+          <button
+            type="button"
+            role="tab"
+            aria-selected={activeSubTab === 'profile'}
+            onClick={() => setActiveSubTab('profile')}
+            className={`px-3.5 py-1.5 rounded-xl text-xs font-semibold transition-all ${
+              activeSubTab === 'profile'
+                ? 'bg-violet-600 text-white shadow'
+                : 'bg-slate-950 text-slate-400 hover:text-white border border-slate-800'
+            }`}
+          >
+            Profile &amp; Ambiance
+          </button>
+          <button
+            type="button"
+            role="tab"
+            aria-selected={activeSubTab === 'security'}
+            onClick={() => setActiveSubTab('security')}
+            className={`px-3.5 py-1.5 rounded-xl text-xs font-semibold transition-all inline-flex items-center gap-1.5 ${
+              activeSubTab === 'security'
+                ? 'bg-violet-600 text-white shadow'
+                : 'bg-slate-950 text-slate-400 hover:text-white border border-slate-800'
+            }`}
+          >
+            <ShieldCheck className="w-3.5 h-3.5" />
+            <span>Security &amp; Privacy</span>
+          </button>
+          <button
+            type="button"
+            role="tab"
+            aria-selected={activeSubTab === 'watchlist'}
+            onClick={() => setActiveSubTab('watchlist')}
+            className={`px-3.5 py-1.5 rounded-xl text-xs font-semibold transition-all inline-flex items-center gap-1.5 ${
+              activeSubTab === 'watchlist'
+                ? 'bg-violet-600 text-white shadow'
+                : 'bg-slate-950 text-slate-400 hover:text-white border border-slate-800'
+            }`}
+          >
+            <Bookmark className="w-3.5 h-3.5" />
+            <span>Watchlist ({watchlistItems.length})</span>
+          </button>
+        </div>
+
+        {/* SUBTAB 1: PROFILE & THEME FORM */}
+        {activeSubTab === 'profile' && (
+          <form onSubmit={handleSavePreferences} className="space-y-5">
+            <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
+              <div className="space-y-1.5">
+                <label htmlFor="profile-name" className="block text-xs font-medium text-slate-300">
+                  Display Name in Watch Rooms
+                </label>
+                <input
+                  id="profile-name"
+                  type="text"
+                  required
+                  value={displayName}
+                  onChange={(e) => setDisplayName(e.target.value)}
+                  className="w-full px-3.5 py-2.5 text-sm bg-slate-950 border border-slate-800 rounded-xl text-white focus:outline-none focus:border-violet-500"
+                />
+              </div>
+
+              <div className="space-y-1.5">
+                <label htmlFor="profile-email" className="block text-xs font-medium text-slate-300">
+                  Email Address
+                </label>
+                <input
+                  id="profile-email"
+                  type="email"
+                  required
+                  value={email}
+                  onChange={(e) => setEmail(e.target.value)}
+                  className="w-full px-3.5 py-2.5 text-sm bg-slate-950 border border-slate-800 rounded-xl text-white focus:outline-none focus:border-violet-500"
+                />
+              </div>
             </div>
 
-            <div className="space-y-1.5">
-              <label htmlFor="profile-email" className="block text-xs font-medium text-slate-300">
-                Email Address
+            <div className="space-y-2">
+              <label htmlFor="profile-theme" className="block text-xs font-medium text-slate-300">
+                Default Cinema Ambiance Theme
               </label>
-              <input
-                id="profile-email"
-                type="email"
-                value={email}
-                onChange={(e) => setEmail(e.target.value)}
-                className="w-full px-3.5 py-2.5 text-sm bg-slate-950 border border-slate-800 rounded-xl text-white"
-              />
+              <select
+                id="profile-theme"
+                value={preferredTheme}
+                onChange={(e) => setPreferredTheme(e.target.value as RoomThemeId)}
+                className="w-full px-3.5 py-2.5 text-sm bg-slate-950 border border-slate-800 rounded-xl text-white focus:outline-none focus:border-violet-500"
+              >
+                {Object.entries(ROOM_THEMES).map(([id, t]) => (
+                  <option key={id} value={id}>
+                    {t.name} — {t.badge} ({t.subtitle})
+                  </option>
+                ))}
+              </select>
+
+              {/* Theme Live Preview Swatch */}
+              <div
+                className={`p-3.5 rounded-xl border bg-gradient-to-r ${currentThemeMeta.gradientClass} ${currentThemeMeta.borderClass} flex items-center justify-between text-xs`}
+              >
+                <div className="flex items-center gap-2.5">
+                  <span
+                    className="w-3.5 h-3.5 rounded-full ring-2 ring-white/20"
+                    style={{ backgroundColor: currentThemeMeta.accentHex }}
+                  />
+                  <span className="font-semibold text-white">{currentThemeMeta.name}</span>
+                  <span className="text-slate-300">· {currentThemeMeta.subtitle}</span>
+                </div>
+                <span className="px-2 py-0.5 rounded text-[10px] font-mono font-semibold bg-white/10 text-white">
+                  {currentThemeMeta.badge}
+                </span>
+              </div>
             </div>
-          </div>
 
-          <div className="space-y-1.5">
-            <label htmlFor="profile-theme" className="block text-xs font-medium text-slate-300">
-              Default Watch Room Ambient Theme
-            </label>
-            <select
-              id="profile-theme"
-              value={preferredTheme}
-              onChange={(e) => setPreferredTheme(e.target.value as RoomThemeId)}
-              className="w-full px-3.5 py-2.5 text-sm bg-slate-950 border border-slate-800 rounded-xl text-white"
-            >
-              {Object.entries(ROOM_THEMES).map(([id, t]) => (
-                <option key={id} value={id}>
-                  {t.name} — {t.subtitle}
-                </option>
-              ))}
-            </select>
-          </div>
+            <div className="flex items-center justify-between pt-2">
+              {savedNotice ? (
+                <span className="text-xs text-emerald-400 font-medium inline-flex items-center gap-1.5">
+                  <Check className="w-3.5 h-3.5" />
+                  <span>{savedNotice}</span>
+                </span>
+              ) : (
+                <span className="text-xs text-slate-400">
+                  Synced with Cloud SQL PostgreSQL profile preferences.
+                </span>
+              )}
+              <button
+                type="submit"
+                className="px-5 py-2.5 rounded-xl bg-gradient-to-r from-violet-600 to-fuchsia-600 hover:from-violet-500 hover:to-fuchsia-500 text-white font-semibold text-xs shadow-lg transition-all"
+              >
+                Save Profile Preferences
+              </button>
+            </div>
+          </form>
+        )}
 
-          <div className="flex items-center justify-between pt-2">
-            {savedNotice ? (
-              <span className="text-xs text-emerald-400 font-medium">{savedNotice}</span>
-            ) : (
-              <span className="text-xs text-slate-400">
-                Synced with Cloud SQL PostgreSQL profile preferences.
-              </span>
+        {/* SUBTAB 2: SECURITY & PRIVACY SETTINGS */}
+        {activeSubTab === 'security' && (
+          <div className="space-y-4">
+            <div className="text-xs text-slate-400 border-b border-slate-800 pb-2">
+              Configure room privacy, passcode locks, and session preferences for your streaming sessions.
+            </div>
+
+            <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
+              <label className="flex items-start justify-between p-3.5 rounded-xl bg-slate-950 border border-slate-800 cursor-pointer hover:border-slate-700 transition-colors">
+                <div className="space-y-1 pr-3">
+                  <div className="text-xs font-semibold text-white">Local-Only History Mode</div>
+                  <div className="text-[11px] text-slate-400 leading-relaxed">
+                    Store watch progress locally on this device without syncing telemetry to cloud servers.
+                  </div>
+                </div>
+                <input
+                  type="checkbox"
+                  checked={localSec.e2eHistoryEncryption}
+                  onChange={(e) => handleUpdateSecSetting('e2eHistoryEncryption', e.target.checked)}
+                  className="w-4 h-4 mt-0.5 accent-violet-500"
+                />
+              </label>
+
+              <label className="flex items-start justify-between p-3.5 rounded-xl bg-slate-950 border border-slate-800 cursor-pointer hover:border-slate-700 transition-colors">
+                <div className="space-y-1 pr-3">
+                  <div className="text-xs font-semibold text-white">Screen Share Watermark</div>
+                  <div className="text-[11px] text-slate-400 leading-relaxed">
+                    Display participant session ID overlay during watch party screen shares.
+                  </div>
+                </div>
+                <input
+                  type="checkbox"
+                  checked={localSec.drmWatermarkProtection}
+                  onChange={(e) => handleUpdateSecSetting('drmWatermarkProtection', e.target.checked)}
+                  className="w-4 h-4 mt-0.5 accent-violet-500"
+                />
+              </label>
+
+              <label className="flex items-start justify-between p-3.5 rounded-xl bg-slate-950 border border-slate-800 cursor-pointer hover:border-slate-700 transition-colors">
+                <div className="space-y-1 pr-3">
+                  <div className="text-xs font-semibold text-white">Incognito Cinema Mode</div>
+                  <div className="text-[11px] text-slate-400 leading-relaxed">
+                    Do not save any watch progress, history records, or room participation logs.
+                  </div>
+                </div>
+                <input
+                  type="checkbox"
+                  checked={localSec.incognitoSession}
+                  onChange={(e) => handleUpdateSecSetting('incognitoSession', e.target.checked)}
+                  className="w-4 h-4 mt-0.5 accent-violet-500"
+                />
+              </label>
+
+              <label className="flex items-start justify-between p-3.5 rounded-xl bg-slate-950 border border-slate-800 cursor-pointer hover:border-slate-700 transition-colors">
+                <div className="space-y-1 pr-3">
+                  <div className="text-xs font-semibold text-white">DNS over HTTPS Source Lookup</div>
+                  <div className="text-[11px] text-slate-400 leading-relaxed">
+                    Resolve media manifests via encrypted DoH relays to bypass local ISP throttling.
+                  </div>
+                </div>
+                <input
+                  type="checkbox"
+                  checked={localSec.dnsOverHttpsSource}
+                  onChange={(e) => handleUpdateSecSetting('dnsOverHttpsSource', e.target.checked)}
+                  className="w-4 h-4 mt-0.5 accent-violet-500"
+                />
+              </label>
+            </div>
+
+            <div className="p-4 rounded-xl bg-slate-950 border border-slate-800 space-y-2">
+              <label htmlFor="couple-pin-input" className="block text-xs font-medium text-slate-300">
+                Couple Room Strict PIN Passcode
+              </label>
+              <div className="flex items-center gap-3">
+                <input
+                  id="couple-pin-input"
+                  type="password"
+                  maxLength={6}
+                  value={localSec.strictCoupleRoomPin}
+                  onChange={(e) => handleUpdateSecSetting('strictCoupleRoomPin', e.target.value)}
+                  className="px-3.5 py-2 text-xs font-mono tracking-widest bg-slate-900 border border-slate-800 rounded-xl text-white w-32 text-center"
+                />
+                <span className="text-[11px] text-slate-400">
+                  Required when your partner joins your private Couple Cinema rooms.
+                </span>
+              </div>
+            </div>
+
+            {savedNotice && (
+              <div className="p-2.5 rounded-xl bg-emerald-500/10 border border-emerald-500/30 text-xs text-emerald-300 flex items-center gap-2">
+                <Check className="w-3.5 h-3.5" />
+                <span>{savedNotice}</span>
+              </div>
             )}
-            <button
-              type="submit"
-              className="px-5 py-2.5 rounded-xl bg-gradient-to-r from-violet-600 to-fuchsia-600 text-white font-semibold text-xs shadow-lg"
-            >
-              Save Profile Preferences
-            </button>
           </div>
-        </form>
+        )}
+
+        {/* SUBTAB 3: WATCHLIST PREVIEW */}
+        {activeSubTab === 'watchlist' && (
+          <div className="space-y-4">
+            {watchlistItems.length === 0 ? (
+              <div className="p-8 text-center bg-slate-950 border border-slate-800 rounded-2xl space-y-2">
+                <Bookmark className="w-6 h-6 text-slate-500 mx-auto" />
+                <div className="text-sm font-semibold text-white">Your Watchlist is empty</div>
+                <p className="text-xs text-slate-400">
+                  Save titles while browsing to quickly launch Couple Date Nights or Group Watch Parties.
+                </p>
+                {onNavigateToTab && (
+                  <button
+                    type="button"
+                    onClick={() => onNavigateToTab('movies')}
+                    className="px-4 py-2 rounded-xl bg-violet-600 text-white text-xs font-semibold mt-2"
+                  >
+                    Browse Catalog
+                  </button>
+                )}
+              </div>
+            ) : (
+              <div className="grid grid-cols-2 sm:grid-cols-4 gap-3">
+                {watchlistItems.map((item) => (
+                  <button
+                    key={item.id}
+                    type="button"
+                    onClick={() => onSelectMedia(item)}
+                    className="group text-left p-2.5 rounded-xl bg-slate-950 border border-slate-800 hover:border-violet-500/40 transition-all"
+                  >
+                    <div className="aspect-[3/4] rounded-lg overflow-hidden mb-2 bg-slate-900">
+                      <MediaPoster item={item} variant="poster" className="w-full h-full object-cover group-hover:scale-105 transition-transform" />
+                    </div>
+                    <div className="text-xs font-semibold text-white truncate">{item.title}</div>
+                    <div className="text-[10px] text-slate-400 font-mono">{item.year} · ★ {item.rating}</div>
+                  </button>
+                ))}
+              </div>
+            )}
+          </div>
+        )}
       </div>
     </section>
   );

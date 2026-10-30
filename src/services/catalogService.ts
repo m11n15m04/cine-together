@@ -159,6 +159,16 @@ const LANGUAGE_MAP: Record<string, string> = {
   hi: 'Hindi',
   it: 'Italian',
   zh: 'Mandarin',
+  te: 'Telugu',
+  ta: 'Tamil',
+  ml: 'Malayalam',
+  kn: 'Kannada',
+  bn: 'Bengali',
+  mr: 'Marathi',
+  pa: 'Punjabi',
+  pt: 'Portuguese',
+  ru: 'Russian',
+  ar: 'Arabic',
 };
 
 const PLATFORMS_CYCLE: PlatformOrigin[] = [
@@ -738,6 +748,138 @@ export async function getTmdbPopularTv(page = 1): Promise<{
   };
 }
 
+export async function getTmdbTopRated(page = 1): Promise<{
+  items: MediaItem[];
+  page: number;
+  totalPages: number;
+  totalResults: number;
+  ok: boolean;
+}> {
+  const res = await fetchTmdbEndpoint('/movie/top_rated', { page });
+  if (!res.ok || !res.data) {
+    return { items: [], page, totalPages: 0, totalResults: 0, ok: false };
+  }
+  const results: RawTmdbItem[] = Array.isArray(res.data.results) ? res.data.results : [];
+  const items = results
+    .map((r) => normalizeTmdbItem(r, 'movie'))
+    .filter((i): i is MediaItem => Boolean(i));
+
+  return {
+    items,
+    page: res.data.page || page,
+    totalPages: res.data.total_pages || 1,
+    totalResults: res.data.total_results || items.length,
+    ok: true,
+  };
+}
+
+export async function getTmdbUpcoming(page = 1): Promise<{
+  items: MediaItem[];
+  page: number;
+  totalPages: number;
+  totalResults: number;
+  ok: boolean;
+}> {
+  const res = await fetchTmdbEndpoint('/movie/upcoming', { page });
+  if (!res.ok || !res.data) {
+    return { items: [], page, totalPages: 0, totalResults: 0, ok: false };
+  }
+  const results: RawTmdbItem[] = Array.isArray(res.data.results) ? res.data.results : [];
+  const items = results
+    .map((r) => normalizeTmdbItem(r, 'movie'))
+    .filter((i): i is MediaItem => Boolean(i));
+
+  return {
+    items,
+    page: res.data.page || page,
+    totalPages: res.data.total_pages || 1,
+    totalResults: res.data.total_results || items.length,
+    ok: true,
+  };
+}
+
+export async function getTmdbHindiMovies(page = 1): Promise<{
+  items: MediaItem[];
+  page: number;
+  totalPages: number;
+  totalResults: number;
+  ok: boolean;
+}> {
+  const res = await fetchTmdbEndpoint('/discover/movie', {
+    with_original_language: 'hi',
+    sort_by: 'popularity.desc',
+    page,
+  });
+  if (!res.ok || !res.data) {
+    return { items: [], page, totalPages: 0, totalResults: 0, ok: false };
+  }
+  const results: RawTmdbItem[] = Array.isArray(res.data.results) ? res.data.results : [];
+  const items = results
+    .map((r) => {
+      const item = normalizeTmdbItem(r, 'movie');
+      if (item) {
+        item.language = 'Hindi';
+        if (!item.genres.includes('Bollywood')) item.genres.push('Bollywood');
+      }
+      return item;
+    })
+    .filter((i): i is MediaItem => Boolean(i));
+
+  return {
+    items,
+    page: res.data.page || page,
+    totalPages: res.data.total_pages || 1,
+    totalResults: res.data.total_results || items.length,
+    ok: true,
+  };
+}
+
+export async function getTmdbSouthIndianMovies(page = 1): Promise<{
+  items: MediaItem[];
+  page: number;
+  totalPages: number;
+  totalResults: number;
+  ok: boolean;
+}> {
+  const res = await fetchTmdbEndpoint('/discover/movie', {
+    with_original_language: 'te|ta|ml|kn',
+    sort_by: 'popularity.desc',
+    page,
+  });
+  if (!res.ok || !res.data) {
+    return { items: [], page, totalPages: 0, totalResults: 0, ok: false };
+  }
+  const results: RawTmdbItem[] = Array.isArray(res.data.results) ? res.data.results : [];
+  const items = results
+    .map((r) => {
+      const item = normalizeTmdbItem(r, 'movie');
+      if (item) {
+        const origLang = (r.original_language || '').toLowerCase();
+        item.language =
+          origLang === 'te'
+            ? 'Telugu'
+            : origLang === 'ta'
+            ? 'Tamil'
+            : origLang === 'ml'
+            ? 'Malayalam'
+            : origLang === 'kn'
+            ? 'Kannada'
+            : 'South Indian';
+        if (!item.genres.includes('South Indian')) item.genres.push('South Indian');
+      }
+      return item;
+    })
+    .filter((i): i is MediaItem => Boolean(i));
+
+  return {
+    items,
+    page: res.data.page || page,
+    totalPages: res.data.total_pages || 1,
+    totalResults: res.data.total_results || items.length,
+    ok: true,
+  };
+}
+
 export async function searchTmdb(
   query: string,
   type: 'all' | 'movie' | 'tv' = 'all',
@@ -1058,6 +1200,23 @@ export async function fetchFullNxshaCatalog(forceRefresh = false) {
         }
       }
       byTab[res.tabKey] = Array.from(tabMap.values());
+    }
+
+    // Ensure curated initial catalog items (with verified playback sources and language tags) are preserved
+    for (const cur of INITIAL_CATALOG) {
+      const key = `${cur.mediaType}:${cur.tmdbId}`;
+      const existing = mergedMap.get(key);
+      if (!existing) {
+        mergedMap.set(key, cur);
+        if (cur.mediaType === 'movie') byTab.movie.push(cur);
+        else if (cur.mediaType === 'tv') byTab.tv.push(cur);
+        else if (cur.mediaType === 'anime') byTab.anime.push(cur);
+      } else {
+        if (cur.language) existing.language = cur.language;
+        if (cur.authorizedPlaybackSource) existing.authorizedPlaybackSource = cur.authorizedPlaybackSource;
+        if (cur.hlsUrl) existing.hlsUrl = cur.hlsUrl;
+        if (cur.sourceAvailability === 'verified') existing.sourceAvailability = 'verified';
+      }
     }
 
     const finalItems = Array.from(mergedMap.values());

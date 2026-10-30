@@ -90,6 +90,15 @@ export interface MediaItem {
   sectionHeading?: string;
   sourceProvider?: string;
   playbackStatus?: PlaybackCapabilityStatus;
+  metadataProvider?: string;
+  authorizedPlaybackSource?: string;
+  playbackType?: 'synced-studio' | 'embed-only' | 'external-watch' | 'metadata-only';
+  sourceAvailability?: 'verified' | 'unverified' | 'unavailable';
+  playbackCapability?: {
+    canSync: boolean;
+    canEmbed: boolean;
+    requiresExternalWatch: boolean;
+  };
   nxshaWatchUrl: string;
   nxshaEmbedUrl: string;
   streamUrl: string;
