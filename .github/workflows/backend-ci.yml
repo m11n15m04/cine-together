@@ -39,6 +39,7 @@ jobs:
           node-version-file: .node-version
           cache: npm
       - run: npm ci
+      - run: npm audit --omit=dev --audit-level=moderate
       - run: psql "$DATABASE_URL" -v ON_ERROR_STOP=1 -f tests/legacy-schema.sql
       - run: npm run db:migrate
       - run: npm run lint

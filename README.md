@@ -134,9 +134,12 @@ External provider links do not expose a synchronization API, so their playback c
 npm run lint
 npm run build
 npm test
+npm audit --omit=dev --audit-level=moderate
 ```
 
 The unit and HTTP tests cover token signing, playback-source validation, private-route authorization, guest sessions, metadata-only availability, and health behavior. The PostgreSQL migration, repository, and WebSocket persistence tests are skipped unless `TEST_DATABASE_URL` points to a dedicated disposable database whose name contains `test`, and `CINETEST_DATABASE_ALLOW_WRITE=true` is set. Apply migrations to that database first. The integration tests create uniquely named test rows and remove them afterward. Do not point `TEST_DATABASE_URL` at a production database.
+
+The reviewed lockfile has no production advisories under `npm audit --omit=dev`. The full audit still reports four moderate advisories in Drizzle Kit's development-only legacy esbuild config loader; Drizzle Kit is not loaded by the production server or the `db:migrate` runner. No forced downgrade was applied.
 
 ## Render deployment
 

@@ -16,7 +16,7 @@
     "clean": "rm -rf dist dist-server",
     "lint": "tsc --noEmit -p tsconfig.json",
     "db:generate": "drizzle-kit generate --config=src/db/drizzle.config.ts",
-    "db:migrate": "drizzle-kit migrate --config=src/db/drizzle.config.ts",
+    "db:migrate": "node scripts/db-migrate.mjs",
     "test": "node --import tsx --test src/utils/streamEngine.test.ts src/security/tokens.test.ts src/services/mediaSources.test.ts src/services/catalogService.test.ts src/db/migrations.integration.test.ts src/db/repository.test.ts src/routes/api.test.ts src/realtime/partyHub.test.ts"
   },
   "dependencies": {
@@ -26,7 +26,6 @@
     "@types/ws": "^8.18.2",
     "@vitejs/plugin-react": "^6.1.1",
     "dotenv": "^17.2.3",
-    "drizzle-kit": "^0.31.11",
     "drizzle-orm": "^0.45.4",
     "express": "^4.21.2",
     "firebase": "^13.1.0",
@@ -50,6 +49,10 @@
     "tailwindcss": "^4.3.3",
     "tsx": "^4.21.0",
     "typescript": "^7.0.2",
+    "drizzle-kit": "^0.31.11",
     "@types/express": "^4.17.21"
+  },
+  "overrides": {
+    "@grpc/grpc-js": "1.14.7"
   }
 }
