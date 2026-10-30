@@ -32,8 +32,10 @@ test('PostgreSQL watchlist, profile, history, room, and chat persistence', {
   const uid = `cinetogether-test-${crypto.randomUUID()}`;
   const hostId = `test-host-${crypto.randomUUID()}`;
   const roomCode = `TST-${crypto.randomUUID().replaceAll('-', '').slice(0, 12).toUpperCase()}`;
+  const privateRoomCode = `PRV-${crypto.randomUUID().replaceAll('-', '').slice(0, 12).toUpperCase()}`;
   let historyId: string | undefined;
   let roomId: string | undefined;
+  let privateRoomId: string | undefined;
   try {
     assert.equal((await checkDatabaseConnection()).available, true);
 
@@ -71,8 +73,21 @@ test('PostgreSQL watchlist, profile, history, room, and chat persistence', {
       currentMediaId: 'test-film', currentMediaType: 'movie', maxParticipants: 3,
     });
     roomId = room.id;
-    await repository.joinRoomInDb({ roomCode, userId: `${uid}-member`, displayName: 'Test Guest', role: 'member' });
-    await repository.joinRoomInDb({ roomCode, userId: `${uid}-member`, displayName: 'Test Guest Reconnected', role: 'member' });
+    const guestId = `${uid}-member`;
+    await repository.joinRoomInDb({ roomCode, userId: guestId, displayName: 'Test Guest', role: 'member' });
+    await repository.joinRoomInDb({ roomCode, userId: guestId, displayName: 'Test Guest Reconnected', role: 'member' });
+    const privateRoom = await repository.createWatchRoomInDb({
+      roomCode: privateRoomCode, roomType: 'couple', title: 'Private Test Room', hostUserId: `${hostId}-private`,
+      hostDisplayName: 'Private Host', currentMediaId: 'test-film', currentMediaType: 'movie',
+    });
+    privateRoomId = privateRoom.id;
+    const activeRooms = await repository.listActiveWatchRooms();
+    assert.equal(activeRooms.find((entry) => entry.id === roomId)?.memberCount, 2);
+    assert.equal(activeRooms.some((entry) => entry.id === privateRoomId || entry.roomCode === privateRoomCode), false);
+    await repository.leaveRoomInDb(roomCode, guestId);
+    assert.equal((await repository.listActiveWatchRooms()).find((entry) => entry.id === roomId)?.memberCount, 1);
+    await repository.joinRoomInDb({ roomCode, userId: guestId, displayName: 'Test Guest Reconnected', role: 'member' });
+    assert.equal((await repository.listActiveWatchRooms()).find((entry) => entry.id === roomId)?.memberCount, 2);
     await repository.updatePlaybackStateInDb({
       roomCode, mediaId: 'test-film', status: 'playing', positionSeconds: 42, playbackRate: 1, hostId, revision: 2,
     });
@@ -90,6 +105,7 @@ test('PostgreSQL watchlist, profile, history, room, and chat persistence', {
     assert.equal(snapshot?.messages.some((message) => message.text === 'Persisted message'), true);
   } finally {
     if (roomId) await db.delete(schema.watchRooms).where(eq(schema.watchRooms.id, roomId)).catch(() => {});
+    if (privateRoomId) await db.delete(schema.watchRooms).where(eq(schema.watchRooms.id, privateRoomId)).catch(() => {});
     if (historyId) await db.delete(schema.watchSessions).where(eq(schema.watchSessions.id, historyId)).catch(() => {});
     await db.delete(schema.watchlists).where(eq(schema.watchlists.userId, uid)).catch(() => {});
     await db.delete(schema.profiles).where(eq(schema.profiles.uid, uid)).catch(() => {});

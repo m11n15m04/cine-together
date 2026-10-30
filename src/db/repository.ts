@@ -73,12 +73,21 @@ export async function seedDemoCatalog(): Promise<void> {
 
 export async function listActiveWatchRooms(): Promise<WatchRoomSummary[]> {
   const rows = await db
-    .select()
+    .select({
+      room: watchRooms,
+      memberCount: sql<number>`(
+        SELECT count(*)::int
+        FROM ${roomMembers}
+        WHERE ${roomMembers.roomId} = ${watchRooms.id}
+          AND ${roomMembers.isOnline} = true
+          AND ${roomMembers.leftAt} IS NULL
+      )`,
+    })
     .from(watchRooms)
     .where(and(eq(watchRooms.isPrivate, false), ne(watchRooms.status, 'ended')))
     .orderBy(desc(watchRooms.createdAt))
     .limit(50);
-  return rows.map((room) => ({
+  return rows.map(({ room, memberCount }) => ({
     id: room.id,
     roomCode: room.roomCode,
     roomType: room.roomType === 'couple' ? 'couple' : 'group',
@@ -95,7 +104,7 @@ export async function listActiveWatchRooms(): Promise<WatchRoomSummary[]> {
     collaborativeControls: room.collaborativeControls,
     roomTheme: room.roomTheme as RoomThemeId,
     status: room.status as WatchRoomSummary['status'],
-    memberCount: 0,
+    memberCount,
     createdAt: room.createdAt.toISOString(),
   }));
 }
