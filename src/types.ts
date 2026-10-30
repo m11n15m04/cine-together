@@ -94,6 +94,8 @@ export interface MediaItem {
   sectionHeading?: string;
   sourceProvider?: string;
   playbackStatus?: PlaybackCapabilityStatus;
+  authorizedSourceType?: 'mp4' | 'hls' | 'external';
+  authorizedProviderUrl?: string;
   metadataProvider?: string;
   authorizedPlaybackSource?: string;
   playbackType?: 'synced-studio' | 'embed-only' | 'external-watch' | 'metadata-only';

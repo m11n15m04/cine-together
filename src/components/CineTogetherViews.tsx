@@ -1051,6 +1051,10 @@ export const ProfileAndAuthView: React.FC<ProfileAndAuthViewProps> = ({
 
   const handleGoogleSignIn = async () => {
     setAuthError(null);
+    if (!auth) {
+      setAuthError('Firebase Authentication is not configured in this environment.');
+      return;
+    }
     try {
       const cred = await signInWithPopup(auth, googleAuthProvider);
       if (cred.user) {
@@ -1075,7 +1079,7 @@ export const ProfileAndAuthView: React.FC<ProfileAndAuthViewProps> = ({
 
   const handleSignOut = async () => {
     try {
-      await signOut(auth);
+      if (auth) await signOut(auth);
     } catch {
       // ignore
     }

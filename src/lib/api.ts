@@ -44,12 +44,8 @@ export async function getActorToken(options: { allowGuest?: boolean; displayName
   return session.token;
 }
 
-export async function apiFetch(
-  input: RequestInfo | URL,
-  init: RequestInit = {},
-  options: { allowGuest?: boolean; displayName?: string } = {}
-): Promise<Response> {
-  const token = await getActorToken(options).catch(() => null);
+export async function apiFetch(input: RequestInfo | URL, init: RequestInit = {}, options: { allowGuest?: boolean; displayName?: string } = {}): Promise<Response> {
+  const token = await getActorToken(options);
   const headers = new Headers(init.headers);
   if (init.body && !headers.has('Content-Type')) headers.set('Content-Type', 'application/json');
   if (token) headers.set('Authorization', `Bearer ${token}`);

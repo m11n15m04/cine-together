@@ -126,8 +126,8 @@ const YEAR_FILTERS = ['All Years', '2026', '2025', '2024', '2023', '2022', '2021
 
 export default function App() {
   const [activeTab, setActiveTab] = useState<ActiveTab>('home');
-  const [catalog, setCatalog] = useState<MediaItem[]>(INITIAL_CATALOG);
-  const [catalogLoading, setCatalogLoading] = useState<boolean>(false);
+  const [catalog, setCatalog] = useState<MediaItem[]>([]);
+  const [catalogLoading, setCatalogLoading] = useState<boolean>(true);
   const [catalogError, setCatalogError] = useState<string | null>(null);
   const [catalogBackendPage, setCatalogBackendPage] = useState<number>(1);
   const [catalogBackendHasMore, setCatalogBackendHasMore] = useState<boolean>(true);
@@ -154,18 +154,37 @@ export default function App() {
     query: string;
   } | null>(null);
 
-  const [nxshaSourceLabel, setNxshaSourceLabel] = useState<string>(
-    'CineTogether Live Catalog (Powered by Nxsha.space)'
-  );
+  const [nxshaSourceLabel, setNxshaSourceLabel] = useState<string>('Nxsha Catalog');
   const [isDemoData, setIsDemoData] = useState<boolean>(false);
   const [isProviderUnavailable, setIsProviderUnavailable] = useState<boolean>(false);
   const [providerErrorCode, setProviderErrorCode] = useState<number | null>(null);
 
   const handleLoadTestFixtures = () => {
     setCatalog(TEST_MEDIA_FIXTURES);
+    setSelectedMedia(TEST_MEDIA_FIXTURES[0]);
     setIsProviderUnavailable(false);
+    setIsDemoData(true);
     setCatalogError(null);
-    setNxshaSourceLabel('Isolated Test Media Fixtures (CC0 Sample Streams)');
+    setNxshaSourceLabel('Offline Sample Content (Test Media Fixtures)');
+    setProviderHealth({
+      nxshaReachable: false,
+      catalogSource: 'Offline Sample Content (Isolated Test Fixtures)',
+    });
+    triggerBanner('Loaded verified offline test media fixtures for playback testing.');
+  };
+
+  const handleLoadOfflineCuratedSample = () => {
+    setCatalog(INITIAL_CATALOG);
+    setSelectedMedia(INITIAL_CATALOG[0]);
+    setIsProviderUnavailable(false);
+    setIsDemoData(true);
+    setCatalogError(null);
+    setNxshaSourceLabel('Offline Sample Content (Curated Demo)');
+    setProviderHealth({
+      nxshaReachable: false,
+      catalogSource: 'Offline Sample Content (Curated Preview)',
+    });
+    triggerBanner('Loaded curated offline sample catalog.');
   };
 
   // Active Watch Room Code & Mode
@@ -205,12 +224,12 @@ export default function App() {
   const PAGE_SIZE = 24;
 
   // Active Media & Inline Theater Modal State
-  const [selectedMedia, setSelectedMedia] = useState<MediaItem>(INITIAL_CATALOG[0]);
+  const [selectedMedia, setSelectedMedia] = useState<MediaItem>(TEST_MEDIA_FIXTURES[0]);
   const [isTheaterOpen, setIsTheaterOpen] = useState<boolean>(false);
 
   // User Watch History & My List (Watchlist)
-  const [watchHistory, setWatchHistory] = useState<WatchHistoryEntry[]>(INITIAL_WATCH_HISTORY);
-  const [likedIds, setLikedIds] = useState<string[]>(['nx-204988', 'nx-969681', 'nx-278']);
+  const [watchHistory, setWatchHistory] = useState<WatchHistoryEntry[]>([]);
+  const [likedIds, setLikedIds] = useState<string[]>([]);
 
   // Offline Vault Downloads
   const [downloads, setDownloads] = useState<OfflineDownloadItem[]>([
@@ -340,19 +359,18 @@ export default function App() {
           setIsProviderUnavailable(true);
           setProviderErrorCode(503);
         }
-        return r.json();
+        return r.json().catch(() => null);
       })
       .then((data) => {
-        if (data.providers) {
-          const reachable = Boolean(data.providers.nxsha?.reachable);
-          setProviderHealth({
-            nxshaReachable: reachable,
-            catalogSource: 'Nxsha.space Live Catalog',
-          });
-          if (!reachable && data.status === 'unreachable') {
-            setIsProviderUnavailable(true);
-            setProviderErrorCode(503);
-          }
+        if (!data) return;
+        const reachable = Boolean(data.provider?.catalogApi?.status === 'available' || data.status === 'healthy');
+        setProviderHealth({
+          nxshaReachable: reachable,
+          catalogSource: reachable ? 'Nxsha.space Live Catalog' : 'Nxsha Catalog Unavailable (503)',
+        });
+        if (!reachable) {
+          setIsProviderUnavailable(true);
+          setProviderErrorCode(503);
         }
       })
       .catch(() => {});
@@ -363,17 +381,28 @@ export default function App() {
         if (resp.status === 503) {
           setIsProviderUnavailable(true);
           setProviderErrorCode(503);
+          setCatalog([]);
+          setNxshaSourceLabel('Nxsha catalog unavailable (HTTP 503)');
           setCatalogError('Nxsha catalog provider is currently unavailable (HTTP 503 Service Unavailable).');
           return null;
         }
         if (!resp.ok) {
+          setCatalog([]);
           setCatalogError(`Catalog service responded with HTTP ${resp.status}`);
           return null;
         }
-        return resp.json();
+        return resp.json().catch(() => null);
       })
       .then((data) => {
         if (!data) return;
+        if (data.state === 'unavailable' || data.code === 'NXSHA_CATALOG_API_ACCESS_REQUIRED') {
+          setIsProviderUnavailable(true);
+          setProviderErrorCode(503);
+          setCatalog([]);
+          setNxshaSourceLabel('Nxsha catalog unavailable (HTTP 503)');
+          setCatalogError(data.message || 'Nxsha catalog provider is currently unavailable.');
+          return;
+        }
         if (Array.isArray(data.items) && data.items.length > 0) {
           setIsProviderUnavailable(false);
           setCatalog((prev) => deduplicateAndMergeCatalog(data.items, prev));
@@ -383,8 +412,9 @@ export default function App() {
           setCatalogBackendHasMore(Boolean(data.hasMore));
           setProviderHealth({
             nxshaReachable: Boolean(data.liveConnected),
-            catalogSource: 'Nxsha.space Live Catalog',
+            catalogSource: data.liveConnected ? 'Nxsha.space Live Catalog' : 'Nxsha Catalog (Cached)',
           });
+          setSelectedMedia((curr) => curr || data.items[0]);
 
           const allItems: MediaItem[] = data.items;
           const movies = allItems.filter((i) => i.mediaType === 'movie');
@@ -393,12 +423,16 @@ export default function App() {
           if (trending.length > 0) setTrendingFeed(trending);
           if (movies.length > 0) setPopularMoviesFeed(movies.slice(0, 14));
           if (tvs.length > 0) setPopularTvFeed(tvs.slice(0, 14));
-        } else if (Array.isArray(data.items) && data.items.length === 0) {
+        } else {
           setIsProviderUnavailable(true);
+          setCatalog([]);
           setCatalogError('Catalog provider returned 0 records.');
         }
       })
       .catch(() => {
+        setIsProviderUnavailable(true);
+        setProviderErrorCode(503);
+        setCatalog([]);
         setCatalogError('Could not load catalog feed. Check network or retry.');
       })
       .finally(() => {
@@ -412,16 +446,38 @@ export default function App() {
   useEffect(() => {
     loadInitialFeeds();
 
-    fetch(`/api/watchlist?userId=${encodeURIComponent(userProfile.uid)}`)
-      .then((r) => r.json())
+    if (userProfile.isGuest) return;
+
+    apiFetch('/api/watchlist')
+      .then((r) => (r.ok ? r.json() : null))
       .then((data) => {
-        if (Array.isArray(data.items) && data.items.length > 0) {
+        if (Array.isArray(data?.items) && data.items.length > 0) {
           const dbIds = data.items.map((i: { mediaId: string }) => i.mediaId);
           setLikedIds((prev) => Array.from(new Set([...prev, ...dbIds])));
         }
       })
       .catch(() => {});
-  }, [userProfile.uid]);
+
+    apiFetch('/api/watch-history')
+      .then((r) => (r.ok ? r.json() : null))
+      .then((data) => {
+        if (Array.isArray(data?.items)) {
+          setWatchHistory(
+            data.items.map((row: any) => ({
+              mediaId: row.mediaId,
+              watchedAt: row.lastWatchedAt || new Date().toISOString(),
+              progressSeconds: row.progressSeconds || 0,
+              durationSeconds: row.durationSeconds || 7200,
+              completed: Boolean(row.endedAt),
+              genres: [],
+              platform: 'Unverified',
+              roomType: row.roomType === 'couple' || row.roomType === 'group' ? row.roomType : 'solo',
+            }))
+          );
+        }
+      })
+      .catch(() => {});
+  }, [userProfile.isGuest, userProfile.uid]);
 
   // Handle Dynamic "Load More" from Codex backend provider
   const handleLoadMoreCatalog = async () => {
@@ -822,19 +878,19 @@ export default function App() {
         ];
       });
 
-      fetch('/api/sessions/record', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({
-          userId: userProfile.uid,
-          mediaId: item.id,
-          mediaTitle: item.title,
-          mediaType: item.mediaType,
-          roomType: 'solo',
-          progressSeconds: 300,
-          durationSeconds: (item.durationMinutes || 110) * 60,
-        }),
-      }).catch(() => {});
+      if (!userProfile.isGuest) {
+        apiFetch('/api/sessions/record', {
+          method: 'POST',
+          body: JSON.stringify({
+            mediaId: item.id,
+            mediaTitle: item.title,
+            mediaType: item.mediaType || 'movie',
+            roomType: 'solo',
+            progressSeconds: 300,
+            durationSeconds: (item.durationMinutes || 110) * 60,
+          }),
+        }).catch(() => {});
+      }
     }
   };
 
@@ -902,28 +958,43 @@ export default function App() {
     setLikedIds((prev) =>
       alreadyLiked ? prev.filter((id) => id !== item.id) : [...prev, item.id]
     );
-    triggerBanner(
-      alreadyLiked
-        ? `Removed "${item.title}" from My List.`
-        : `Saved "${item.title}" to My List (Cloud SQL Synced).`
-    );
+
+    if (userProfile.isGuest) {
+      triggerBanner(
+        alreadyLiked
+          ? `Removed "${item.title}" from this session's My List.`
+          : `Saved "${item.title}" for this browser session. Sign in to sync it across devices.`
+      );
+      return;
+    }
 
     try {
-      await fetch('/api/watchlist/toggle', {
+      const response = await apiFetch('/api/watchlist/toggle', {
         method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
-          userId: userProfile.uid,
           mediaId: item.id,
           mediaTitle: item.title,
           mediaType: item.mediaType,
-          posterUrl: `/poster/${item.id}`,
-          year: item.year,
-          rating: item.rating,
+          posterUrl: item.posterUrl || '',
+          year: item.year || '',
+          rating: typeof item.rating === 'number' ? item.rating : 0,
         }),
       });
+
+      if (!response.ok) {
+        throw new Error('Watchlist synchronization rejected by server.');
+      }
+
+      triggerBanner(
+        alreadyLiked
+          ? `Removed "${item.title}" from My List.`
+          : `Saved "${item.title}" to My List (Cloud SQL Synced).`
+      );
     } catch {
-      // Optimistic state preserved
+      setLikedIds((prev) =>
+        alreadyLiked ? [...prev, item.id] : prev.filter((id) => id !== item.id)
+      );
+      triggerBanner('Could not sync watchlist to database. Please sign in or retry.');
     }
   };
 
@@ -1073,10 +1144,22 @@ export default function App() {
             >
               <span
                 className={`w-2 h-2 rounded-full ${
-                  isDemoData ? 'bg-amber-400' : 'bg-emerald-400'
+                  isProviderUnavailable
+                    ? 'bg-amber-400'
+                    : isDemoData
+                    ? 'bg-sky-400'
+                    : catalogLoading
+                    ? 'bg-slate-400 animate-pulse'
+                    : 'bg-emerald-400'
                 }`}
               />
-              <span>{isDemoData ? 'Demo Catalog + Cloud SQL Active' : nxshaSourceLabel}</span>
+              <span>
+                {isProviderUnavailable
+                  ? 'Nxsha catalog unavailable (503)'
+                  : isDemoData
+                  ? 'Offline Sample Content'
+                  : nxshaSourceLabel}
+              </span>
             </span>
 
             {/* Dark Mode / Ambient Contrast Toggle */}
@@ -1181,7 +1264,7 @@ export default function App() {
           activeTab === 'anime') && (
           <div className="space-y-12">
             {/* Large Cinematic Hero Banner */}
-            {!isTheaterOpen && (
+            {!isTheaterOpen && !isProviderUnavailable && catalog.length > 0 && selectedMedia && (
               <section
                 aria-label="Featured Release Spotlight"
                 className="grid grid-cols-1 lg:grid-cols-12 gap-6 items-stretch bg-gradient-to-br from-slate-900 via-[#121026] to-slate-950 border border-violet-500/20 rounded-3xl overflow-hidden shadow-2xl relative"
@@ -1350,7 +1433,7 @@ export default function App() {
                       }`}
                     >
                       <span className="w-1.5 h-1.5 rounded-full bg-current animate-pulse" />
-                      Nxsha.space Live ({providerHealth?.nxshaReachable ? 'Online · Live Sync' : 'Cached Snapshot'})
+                      Nxsha Catalog: {providerHealth?.nxshaReachable ? 'Live Connected' : 'Official API Access Required (Unavailable)'}
                     </span>
                   </div>
                 </div>
@@ -1419,7 +1502,15 @@ export default function App() {
                     className="px-4 py-2.5 rounded-xl bg-slate-800 hover:bg-slate-700 text-slate-200 text-xs font-semibold inline-flex items-center gap-2 transition-colors border border-slate-700"
                   >
                     <Play className="w-3.5 h-3.5 text-violet-400" />
-                    <span>Open Isolated Test Media Fixtures</span>
+                    <span>Open Isolated Test Media Fixtures (Offline Verification Sample)</span>
+                  </button>
+                  <button
+                    type="button"
+                    onClick={handleLoadOfflineCuratedSample}
+                    className="px-4 py-2.5 rounded-xl bg-violet-950/40 hover:bg-violet-900/40 text-violet-300 text-xs font-semibold inline-flex items-center gap-2 transition-colors border border-violet-700/50"
+                  >
+                    <Film className="w-3.5 h-3.5 text-violet-400" />
+                    <span>Explore Curated Offline Sample Content</span>
                   </button>
                 </div>
               </div>
@@ -1442,8 +1533,15 @@ export default function App() {
               </div>
             )}
 
-            {/* HOMEPAGE THEMATIC HORIZONTAL CAROUSELS (16 Sections when on Home & not searching) */}
-            {activeTab === 'home' && !searchQuery.trim() && (
+            {/* Empty Catalog Notice */}
+            {!catalogLoading && !isProviderUnavailable && !catalogError && filteredCatalog.length === 0 && (
+              <div role="status" className="p-6 rounded-2xl bg-slate-900/60 border border-slate-800 text-sm text-slate-300">
+                {searchQuery ? `No Nxsha titles matched “${searchQuery}”.` : 'The Nxsha catalog is currently empty.'}
+              </div>
+            )}
+
+            {/* HOMEPAGE THEMATIC HORIZONTAL CAROUSELS (when on Home, not searching, and catalog has items) */}
+            {activeTab === 'home' && !searchQuery.trim() && !isProviderUnavailable && catalog.length > 0 && (
               <div className="space-y-10">
                 {/* 3. Trending Movies */}
                 <HorizontalPosterCarousel
