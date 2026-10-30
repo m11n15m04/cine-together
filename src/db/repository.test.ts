@@ -33,11 +33,24 @@ test('PostgreSQL watchlist, profile, history, room, and chat persistence', {
   const hostId = `test-host-${crypto.randomUUID()}`;
   const roomCode = `TST-${crypto.randomUUID().replaceAll('-', '').slice(0, 12).toUpperCase()}`;
   const privateRoomCode = `PRV-${crypto.randomUUID().replaceAll('-', '').slice(0, 12).toUpperCase()}`;
+  const cacheKey = `test-nxsha-cache-${crypto.randomUUID()}`;
   let historyId: string | undefined;
   let roomId: string | undefined;
   let privateRoomId: string | undefined;
   try {
     assert.equal((await checkDatabaseConnection()).available, true);
+
+    const cacheNow = new Date();
+    await repository.putNxshaCatalogCache(cacheKey, { providerId: 'nxsha-provider-id' }, 1_000, cacheNow);
+    assert.deepEqual(await repository.getNxshaCatalogCache(cacheKey, new Date(cacheNow.getTime() + 500)), {
+      providerId: 'nxsha-provider-id',
+    });
+    assert.equal(await repository.getNxshaCatalogCache(cacheKey, new Date(cacheNow.getTime() + 1_000)), null);
+    await repository.putNxshaCatalogCache(cacheKey, { providerId: 'refreshed-provider-id' }, 2_000, cacheNow);
+    assert.deepEqual(await repository.getNxshaCatalogCache(cacheKey, new Date(cacheNow.getTime() + 1_500)), {
+      providerId: 'refreshed-provider-id',
+    });
+    assert.ok((await repository.deleteExpiredNxshaCatalogCache(new Date(cacheNow.getTime() + 2_000))) >= 1);
 
     const watchlistItem = await repository.addUserWatchlistItem({
       userId: uid, mediaId: 'test-film', mediaTitle: 'Test Film', mediaType: 'movie', posterUrl: '', year: '2026', rating: 7.5,
@@ -104,6 +117,8 @@ test('PostgreSQL watchlist, profile, history, room, and chat persistence', {
     assert.equal(snapshot?.members.filter((member) => member.id === `${uid}-member`).length, 1);
     assert.equal(snapshot?.messages.some((message) => message.text === 'Persisted message'), true);
   } finally {
+    const cacheTable = await import('./schema.ts');
+    await db.delete(cacheTable.nxshaCatalogCache).where(eq(cacheTable.nxshaCatalogCache.cacheKey, cacheKey)).catch(() => {});
     if (roomId) await db.delete(schema.watchRooms).where(eq(schema.watchRooms.id, roomId)).catch(() => {});
     if (privateRoomId) await db.delete(schema.watchRooms).where(eq(schema.watchRooms.id, privateRoomId)).catch(() => {});
     if (historyId) await db.delete(schema.watchSessions).where(eq(schema.watchSessions.id, historyId)).catch(() => {});

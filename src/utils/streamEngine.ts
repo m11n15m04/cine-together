@@ -296,7 +296,7 @@ export function filterAndSearchCatalog(
 }
 
 /**
- * Deduplicates and merges catalog items by provider/TMDB ID while preserving the richest metadata.
+ * Deduplicates by Nxsha's native provider ID when present, otherwise by the local item ID.
  */
 export function deduplicateAndMergeCatalog(
   primaryItems: MediaItem[],
@@ -305,8 +305,8 @@ export function deduplicateAndMergeCatalog(
   const map = new Map<string, MediaItem>();
   for (const item of [...primaryItems, ...secondaryItems]) {
     if (!item || !item.title) continue;
-    // Separate keys by mediaType and ID so movie and tv titles with identical IDs never collide
-    const key = `${item.mediaType}:${item.tmdbId || item.id}`;
+    // TMDb/IMDb identifiers are only for Nxsha's documented player routes, never catalog identity.
+    const key = `${item.mediaType}:${item.providerId ? `nxsha:${item.providerId}` : `local:${item.id}`}`;
     const existing = map.get(key);
     if (!existing) {
       map.set(key, item);

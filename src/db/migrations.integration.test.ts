@@ -41,3 +41,14 @@ test('Drizzle migration preserves rows from the pre-existing database schema', {
     await closeDatabaseConnection();
   }
 });
+
+test('Nxsha catalog cache migration is additive and contains refresh and expiry fields', async () => {
+  const { readFile } = await import('node:fs/promises');
+  const migration = await readFile(new URL('../../drizzle/0001_rainy_slyde.sql', import.meta.url), 'utf8');
+  assert.match(migration, /CREATE TABLE "nxsha_catalog_cache"/);
+  assert.match(migration, /"payload" jsonb NOT NULL/);
+  assert.match(migration, /"refreshed_at" timestamp/);
+  assert.match(migration, /"expires_at" timestamp NOT NULL/);
+  assert.doesNotMatch(migration, /\b(DROP|TRUNCATE|DELETE FROM)\b/i);
+  assert.doesNotMatch(migration, /ALTER TABLE "(profiles|watchlists|watch_sessions|watch_rooms)"/i);
+});

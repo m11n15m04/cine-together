@@ -67,7 +67,9 @@ export interface TvSeasonDetail {
 export interface MediaItem {
   id: string;
   providerId?: string;
-  tmdbId: number;
+  /** Nxsha's native identifier lives in providerId; this is only set when Nxsha supplies a TMDb ID. */
+  tmdbId?: number;
+  imdbId?: string;
   title: string;
   originalTitle?: string;
   mediaType: MediaCategory;
@@ -88,6 +90,10 @@ export interface MediaItem {
   playbackStatus?: PlaybackCapabilityStatus;
   authorizedSourceType?: 'mp4' | 'hls' | 'external';
   authorizedProviderUrl?: string;
+  nxshaWatchUrl?: string;
+  nxshaEmbedUrl?: string;
+  /** Set only after separate authorization validation. */
+  streamUrl?: string;
   accentColor: string;
   secondaryColor: string;
   director: string;

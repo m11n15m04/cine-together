@@ -268,7 +268,7 @@ export const AiVoiceAndConcierge: React.FC<AiVoiceAndConciergeProps> = ({
           {
             id: `mod-${Date.now()}`,
             role: 'model',
-            text: `Gemini 3.8 Live Companion: For "${trimmed}", I suggest launching Velvet Echoes in Kyoto (99% Couple Match) or Spider-Man: Brand New Day in 4K UHD ABR.`,
+            text: `The AI companion is not connected right now. Please retry after the service is available.`,
             time: new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' }),
           },
         ]);

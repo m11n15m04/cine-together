@@ -116,7 +116,6 @@ export function createMediaProviderAdapter(options: {
   providerType: PlayerProviderType;
   streamUrl?: string;
   mediaType: MediaCategory;
-  tmdbId: number;
   season?: number;
   episode?: number;
   durationMinutes?: number;

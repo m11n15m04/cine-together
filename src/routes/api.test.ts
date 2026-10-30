@@ -67,6 +67,41 @@ test('catalog metadata without an authorized source reports unavailable playback
   });
 });
 
+test('Nxsha catalog feed and search return explicit unavailable states without TMDB or undocumented requests', async () => {
+  await withApi(async (baseUrl) => {
+    const feed = await fetch(`${baseUrl}/catalog/feed?section=trending`);
+    assert.equal(feed.status, 503);
+    const feedBody = await feed.json() as { code: string; provider: string; state: string; items: unknown[] };
+    assert.equal(feedBody.code, 'NXSHA_CATALOG_API_ACCESS_REQUIRED');
+    assert.equal(feedBody.provider, 'Nxsha');
+    assert.equal(feedBody.state, 'unavailable');
+    assert.deepEqual(feedBody.items, []);
+
+    const search = await fetch(`${baseUrl}/catalog/search?q=example`);
+    assert.equal(search.status, 503);
+    const searchBody = await search.json() as { code: string; provider: string; state: string; items: unknown[] };
+    assert.equal(searchBody.code, 'NXSHA_CATALOG_API_ACCESS_REQUIRED');
+    assert.equal(searchBody.provider, 'Nxsha');
+    assert.equal(searchBody.state, 'unavailable');
+    assert.deepEqual(searchBody.items, []);
+
+    const seasons = await fetch(`${baseUrl}/catalog/nxsha-provider-id/seasons`);
+    assert.equal(seasons.status, 503);
+    assert.equal((await seasons.json() as { code: string }).code, 'NXSHA_CATALOG_API_ACCESS_REQUIRED');
+  });
+});
+
+test('catalog health discloses missing official catalog API access', async () => {
+  await withApi(async (baseUrl) => {
+    const response = await fetch(`${baseUrl}/health/catalog`);
+    assert.equal(response.status, 503);
+    const body = await response.json() as { status: string; provider: { name: string; catalogApi: { documented: boolean } } };
+    assert.equal(body.status, 'unavailable');
+    assert.equal(body.provider.name, 'Nxsha');
+    assert.equal(body.provider.catalogApi.documented, false);
+  });
+});
+
 test('health endpoint reports database degradation when PostgreSQL is not configured', async () => {
   await withApi(async (baseUrl) => {
     const response = await fetch(`${baseUrl}/health`);

@@ -27,11 +27,7 @@ import {
   User,
   Users,
 } from 'lucide-react';
-import {
-  INITIAL_CATALOG,
-  INITIAL_NOTIFICATIONS,
-  INITIAL_SOCIAL_POSTS,
-} from './data/catalog';
+import { INITIAL_NOTIFICATIONS, INITIAL_SOCIAL_POSTS } from './data/catalog';
 import {
   BRAND_CONFIG,
   MediaItem,
@@ -116,29 +112,22 @@ const GENRE_FILTERS = [
 
 const YEAR_FILTERS = ['All Years', '2026', '2025', '2024', '2023', '2022', '2021', '2020'];
 
+function playbackIsAvailable(item: MediaItem): boolean {
+  return item.playbackStatus === 'synced-ready' || item.playbackStatus === 'external-watch';
+}
+
 export default function App() {
   const [activeTab, setActiveTab] = useState<ActiveTab>('home');
-  const [catalog, setCatalog] = useState<MediaItem[]>(INITIAL_CATALOG);
-  const [catalogLoading, setCatalogLoading] = useState<boolean>(false);
+  const [catalog, setCatalog] = useState<MediaItem[]>([]);
+  const [catalogLoading, setCatalogLoading] = useState<boolean>(true);
   const [catalogError, setCatalogError] = useState<string | null>(null);
+  const [catalogUnavailable, setCatalogUnavailable] = useState<boolean>(false);
   const [catalogBackendPage, setCatalogBackendPage] = useState<number>(1);
   const [catalogBackendHasMore, setCatalogBackendHasMore] = useState<boolean>(true);
   const [catalogLoadingMore, setCatalogLoadingMore] = useState<boolean>(false);
 
-  // Independent feeds for homepage sections
-  const [trendingFeed, setTrendingFeed] = useState<MediaItem[]>([]);
-  const [popularMoviesFeed, setPopularMoviesFeed] = useState<MediaItem[]>([]);
-  const [popularTvFeed, setPopularTvFeed] = useState<MediaItem[]>([]);
-  const [trendingLoading, setTrendingLoading] = useState<boolean>(false);
-  const [popularMoviesLoading, setPopularMoviesLoading] = useState<boolean>(false);
-  const [popularTvLoading, setPopularTvLoading] = useState<boolean>(false);
-
   // Server health state
-  const [providerHealth, setProviderHealth] = useState<{
-    tmdbReachable: boolean;
-    nxshaReachable: boolean;
-    authType?: string;
-  } | null>(null);
+  const [providerHealth, setProviderHealth] = useState<{ catalogAvailable: boolean } | null>(null);
 
   // Server search feedback
   const [serverSearchMetadata, setServerSearchMetadata] = useState<{
@@ -147,10 +136,7 @@ export default function App() {
     query: string;
   } | null>(null);
 
-  const [nxshaSourceLabel, setNxshaSourceLabel] = useState<string>(
-    'CineTogether Unified Live Catalog (TMDB + Nxsha + Studio)'
-  );
-  const [isDemoData, setIsDemoData] = useState<boolean>(false);
+  const [nxshaSourceLabel, setNxshaSourceLabel] = useState<string>('Nxsha catalog');
 
   // Active Watch Room Code & Mode
   const [activeRoomCode, setActiveRoomCode] = useState<string>('');
@@ -179,6 +165,7 @@ export default function App() {
   // Search & Discovery Filters + Pagination
   const [searchQuery, setSearchQuery] = useState<string>('');
   const [liveSearchLoading, setLiveSearchLoading] = useState<boolean>(false);
+  const [serverSearchResults, setServerSearchResults] = useState<MediaItem[] | null>(null);
   const [categoryFilter, setCategoryFilter] = useState<'all' | 'movie' | 'tv' | 'anime'>('all');
   const [platformFilter, setPlatformFilter] = useState<string>('All Platforms');
   const [languageFilter, setLanguageFilter] = useState<string>('All Languages');
@@ -189,7 +176,7 @@ export default function App() {
   const PAGE_SIZE = 24;
 
   // Active Media & Inline Theater Modal State
-  const [selectedMedia, setSelectedMedia] = useState<MediaItem>(INITIAL_CATALOG[0]);
+  const [selectedMedia, setSelectedMedia] = useState<MediaItem | null>(null);
   const [isTheaterOpen, setIsTheaterOpen] = useState<boolean>(false);
 
   // User Watch History & My List (Watchlist)
@@ -272,79 +259,39 @@ export default function App() {
     return () => window.removeEventListener('popstate', syncFromUrl);
   }, []);
 
-  // Load unified catalog & independent feeds (trending, popular movies, popular TV) + health
-  const loadInitialFeeds = () => {
+  // Load only Nxsha catalog data. The API returns 503 until an officially supported
+  // catalog integration is available; this UI never switches catalog providers.
+  const loadInitialFeeds = async () => {
     setCatalogLoading(true);
     setCatalogError(null);
-
-    // 0. Check Catalog Health
-    fetch('/api/health/catalog')
-      .then((r) => r.json())
-      .then((data) => {
-        if (data.providers) {
-          setProviderHealth({
-            tmdbReachable: Boolean(data.providers.tmdb?.reachable),
-            nxshaReachable: Boolean(data.providers.nxsha?.reachable),
-            authType: data.providers.tmdb?.authType,
-          });
-        }
-      })
-      .catch(() => {});
-
-    // 1. Unified Catalog Feed (page 1)
-    fetch('/api/catalog/feed?section=all&page=1&pageSize=36')
-      .then((r) => r.json())
-      .then((data) => {
-        if (Array.isArray(data.items) && data.items.length > 0) {
-          setCatalog((prev) => deduplicateAndMergeCatalog(data.items, prev));
-          setNxshaSourceLabel(data.source || 'CineTogether Unified Live Catalog');
-          setIsDemoData(Boolean(data.isDemoFallback));
-          setCatalogBackendPage(1);
-          setCatalogBackendHasMore(Boolean(data.hasMore));
-        }
-      })
-      .catch(() => {
-        setCatalogError('Could not load live catalog. Check network or retry.');
-      })
-      .finally(() => {
-        setCatalogLoading(false);
-      });
-
-    // 2. Independent TMDB Trending Feed
-    setTrendingLoading(true);
-    fetch('/api/catalog/feed?section=trending&page=1&pageSize=12')
-      .then((r) => r.json())
-      .then((data) => {
-        if (Array.isArray(data.items)) {
-          setTrendingFeed(data.items);
-        }
-      })
-      .catch(() => {})
-      .finally(() => setTrendingLoading(false));
-
-    // 3. Independent TMDB Popular Movies Feed
-    setPopularMoviesLoading(true);
-    fetch('/api/catalog/feed?section=popular-movies&page=1&pageSize=12')
-      .then((r) => r.json())
-      .then((data) => {
-        if (Array.isArray(data.items)) {
-          setPopularMoviesFeed(data.items);
-        }
-      })
-      .catch(() => {})
-      .finally(() => setPopularMoviesLoading(false));
-
-    // 4. Independent TMDB Popular TV Feed
-    setPopularTvLoading(true);
-    fetch('/api/catalog/feed?section=popular-tv&page=1&pageSize=12')
-      .then((r) => r.json())
-      .then((data) => {
-        if (Array.isArray(data.items)) {
-          setPopularTvFeed(data.items);
-        }
-      })
-      .catch(() => {})
-      .finally(() => setPopularTvLoading(false));
+    setCatalogUnavailable(false);
+    try {
+      const [healthResponse, feedResponse] = await Promise.all([
+        fetch('/api/health/catalog'),
+        fetch('/api/catalog/feed?section=all&page=1&pageSize=36'),
+      ]);
+      const health = await healthResponse.json();
+      setProviderHealth({ catalogAvailable: health.provider?.catalogApi?.status === 'available' });
+      const data = await feedResponse.json();
+      if (!feedResponse.ok) {
+        setCatalog([]);
+        setCatalogUnavailable(data.state === 'unavailable' || data.code === 'NXSHA_CATALOG_API_ACCESS_REQUIRED');
+        setCatalogError(data.message || 'The Nxsha catalog could not be loaded. Please retry.');
+        setNxshaSourceLabel('Nxsha catalog unavailable');
+        return;
+      }
+      const items = Array.isArray(data.items) ? data.items as MediaItem[] : [];
+      setCatalog(items);
+      setCatalogPage(1);
+      setCatalogBackendPage(1);
+      setCatalogBackendHasMore(Boolean(data.hasMore));
+      setNxshaSourceLabel('Nxsha catalog');
+      if (items.length > 0) setSelectedMedia((current) => current || items[0]);
+    } catch {
+      setCatalogError('A network error prevented the Nxsha catalog from loading. Please retry.');
+    } finally {
+      setCatalogLoading(false);
+    }
   };
 
   useEffect(() => {
@@ -388,12 +335,7 @@ export default function App() {
     if (catalogLoadingMore) return;
     setCatalogLoadingMore(true);
 
-    const section =
-      categoryFilter === 'movie'
-        ? 'popular-movies'
-        : categoryFilter === 'tv'
-        ? 'popular-tv'
-        : 'all';
+    const section = categoryFilter;
     const nextPage = catalogBackendPage + 1;
 
     try {
@@ -418,13 +360,14 @@ export default function App() {
     }
   };
 
-  // Debounced server-backed multi-provider search against /api/catalog/search?q=...
+  // Debounced search through the Nxsha-only backend catalog contract.
   useEffect(() => {
     const trimmed = searchQuery.trim();
     setCatalogPage(1);
     if (trimmed.length < 2) {
       setLiveSearchLoading(false);
       setServerSearchMetadata(null);
+      setServerSearchResults(null);
       return;
     }
 
@@ -436,19 +379,25 @@ export default function App() {
           categoryFilter === 'all' ? 'all' : categoryFilter
         }`
       )
-        .then((r) => r.json())
-        .then((data) => {
+        .then(async (r) => ({ response: r, data: await r.json() }))
+        .then(({ response, data }) => {
           if (!active) return;
-          if (Array.isArray(data.items)) {
-            setCatalog((prev) => deduplicateAndMergeCatalog(data.items, prev));
+          if (response.ok && Array.isArray(data.items)) {
+            setServerSearchResults(data.items as MediaItem[]);
             setServerSearchMetadata({
               totalResults: data.totalResults ?? data.items.length,
-              providers: data.providers || ['tmdb', 'nxsha'],
+              providers: ['Nxsha'],
               query: trimmed,
             });
+          } else {
+            setServerSearchResults([]);
+            setCatalogUnavailable(data.state === 'unavailable' || data.code === 'NXSHA_CATALOG_API_ACCESS_REQUIRED');
+            setCatalogError(data.message || 'Nxsha search is unavailable. Please retry.');
           }
         })
-        .catch(() => {})
+        .catch(() => {
+          if (active) setCatalogError('A network error prevented Nxsha search from completing.');
+        })
         .finally(() => {
           if (active) setLiveSearchLoading(false);
         });
@@ -528,7 +477,7 @@ export default function App() {
   // Filtered catalog & Paginated Slice
   const filteredCatalog = useMemo(() => {
     return filterAndSearchCatalog(
-      catalog,
+      serverSearchResults ?? catalog,
       searchQuery,
       categoryFilter,
       platformFilter,
@@ -542,6 +491,7 @@ export default function App() {
     );
   }, [
     catalog,
+    serverSearchResults,
     searchQuery,
     categoryFilter,
     platformFilter,
@@ -818,12 +768,8 @@ export default function App() {
               data-testid="catalog-source-indicator"
               className="inline-flex items-center gap-1.5 px-2.5 py-1 rounded-lg bg-slate-900 border border-slate-800 text-[11px] font-mono text-slate-300"
             >
-              <span
-                className={`w-2 h-2 rounded-full ${
-                  isDemoData ? 'bg-amber-400' : 'bg-emerald-400'
-                }`}
-              />
-              <span>{isDemoData ? 'Demo Catalog + Cloud SQL Active' : nxshaSourceLabel}</span>
+              <span className={`w-2 h-2 rounded-full ${catalogUnavailable ? 'bg-amber-400' : catalogLoading ? 'bg-slate-400 animate-pulse' : 'bg-emerald-400'}`} />
+              <span>{nxshaSourceLabel}</span>
             </span>
 
             {/* Dark Mode / Ambient Contrast Toggle */}
@@ -909,7 +855,7 @@ export default function App() {
       {/* Main Content Container */}
       <main className="max-w-7xl mx-auto px-4 sm:px-6 py-8 space-y-10">
         {/* Inline Solo Adaptive Video Player Drawer */}
-        {isTheaterOpen && activeTab === 'home' && (
+        {isTheaterOpen && activeTab === 'home' && selectedMedia && (
           <section aria-label="Active Cinema Theater" className="space-y-4">
             <AdaptiveVideoPlayer
               item={selectedMedia}
@@ -930,7 +876,7 @@ export default function App() {
           activeTab === 'anime') && (
           <div className="space-y-12">
             {/* Large Cinematic Hero Banner */}
-            {!isTheaterOpen && (
+            {!isTheaterOpen && selectedMedia && (
               <section
                 aria-label="Featured Release Spotlight"
                 className="grid grid-cols-1 lg:grid-cols-12 gap-6 items-stretch bg-gradient-to-br from-slate-900 via-[#121026] to-slate-950 border border-violet-500/20 rounded-3xl overflow-hidden shadow-2xl"
@@ -938,19 +884,15 @@ export default function App() {
                 <div className="lg:col-span-7 p-6 sm:p-10 flex flex-col justify-between space-y-6">
                   <div className="space-y-4">
                     <div className="flex flex-wrap items-center gap-2 text-xs font-mono tabular-nums">
-                      <span className="px-2.5 py-0.5 rounded-full bg-violet-500/20 text-violet-300 border border-violet-500/30 font-semibold">
-                        {selectedMedia.platform}
-                      </span>
-                      <span className="text-amber-400 font-semibold">
-                        ★ {selectedMedia.rating.toFixed(1)}
-                      </span>
+                      <span className="px-2.5 py-0.5 rounded-full bg-violet-500/20 text-violet-300 border border-violet-500/30 font-semibold">Nxsha catalog</span>
+                      {Number.isFinite(selectedMedia.rating) && <span className="text-amber-400 font-semibold">★ {selectedMedia.rating.toFixed(1)}</span>}
                       <span className="text-slate-500">·</span>
                       <span className="text-slate-300">{selectedMedia.year}</span>
                       <span className="text-slate-500">·</span>
                       <span className="text-slate-300">{selectedMedia.language}</span>
                       <span className="text-slate-500">·</span>
                       <span className="text-rose-300">
-                        ❤️ {selectedMedia.coupleScore || 95}% Couple Match
+                        {playbackIsAvailable(selectedMedia) ? 'Playback source verified' : 'Playback availability not verified'}
                       </span>
                     </div>
 
@@ -963,11 +905,9 @@ export default function App() {
                     </p>
 
                     <div className="text-xs text-slate-400">
-                      <span>Directed by {selectedMedia.director}</span>
-                      <span className="mx-2">·</span>
-                      <span>Starring {selectedMedia.cast.join(', ')}</span>
-                      <span className="mx-2">·</span>
-                      <span>{selectedMedia.genres.join(' / ')}</span>
+                      {selectedMedia.director && <span>Directed by {selectedMedia.director}</span>}
+                      {selectedMedia.cast?.length ? <><span className="mx-2">·</span><span>Starring {selectedMedia.cast.join(', ')}</span></> : null}
+                      {selectedMedia.genres?.length ? <><span className="mx-2">·</span><span>{selectedMedia.genres.join(' / ')}</span></> : null}
                     </div>
                   </div>
 
@@ -975,11 +915,12 @@ export default function App() {
                   <div className="flex flex-wrap items-center gap-3 pt-2">
                     <button
                       type="button"
+                      disabled={!playbackIsAvailable(selectedMedia)}
                       onClick={() => handleStartWatching(selectedMedia)}
                       className="inline-flex items-center gap-2 px-5 py-3 text-xs sm:text-sm font-semibold bg-white hover:bg-slate-200 text-slate-950 rounded-xl transition-colors whitespace-nowrap shrink-0 shadow-lg"
                     >
                       <Play className="w-4 h-4 fill-current" />
-                      <span>Watch Solo</span>
+                      <span>{playbackIsAvailable(selectedMedia) ? 'Watch Solo' : 'Playback unavailable'}</span>
                     </button>
 
                     <button
@@ -1038,38 +979,36 @@ export default function App() {
               </section>
             )}
 
-            {/* Catalog Health & Provider Connectivity Status */}
+            {/* Provider status; discovery is only sourced from Nxsha. */}
             {providerHealth && (
               <div className="flex flex-wrap items-center justify-between gap-3 p-3.5 rounded-2xl bg-slate-900/60 border border-slate-800 text-xs">
-                <div className="flex flex-wrap items-center gap-3">
+                <div className="flex items-center gap-3">
                   <Database className="w-4 h-4 text-violet-400" />
-                  <span className="text-slate-300 font-medium">Live Providers:</span>
-                  <div className="flex items-center gap-2">
-                    <span
-                      className={`inline-flex items-center gap-1.5 px-2.5 py-0.5 rounded-full font-mono text-[11px] ${
-                        providerHealth.tmdbReachable
-                          ? 'bg-emerald-500/15 text-emerald-300 border border-emerald-500/30'
-                          : 'bg-amber-500/15 text-amber-300 border border-amber-500/30'
-                      }`}
-                    >
-                      <span className="w-1.5 h-1.5 rounded-full bg-current animate-pulse" />
-                      TMDB v3 ({providerHealth.tmdbReachable ? 'Online · Live Sync' : 'Degraded'})
-                    </span>
-                    <span
-                      className={`inline-flex items-center gap-1.5 px-2.5 py-0.5 rounded-full font-mono text-[11px] ${
-                        providerHealth.nxshaReachable
-                          ? 'bg-emerald-500/15 text-emerald-300 border border-emerald-500/30'
-                          : 'bg-amber-500/15 text-amber-300 border border-amber-500/30'
-                      }`}
-                    >
-                      <span className="w-1.5 h-1.5 rounded-full bg-current" />
-                      Nxsha Stream ({providerHealth.nxshaReachable ? 'Online · Multi-Section' : 'Degraded'})
-                    </span>
-                  </div>
+                  <span className="text-slate-300 font-medium">Nxsha catalog:</span>
+                  <span className={`px-2.5 py-0.5 rounded-full font-mono text-[11px] ${providerHealth.catalogAvailable ? 'bg-emerald-500/15 text-emerald-300 border border-emerald-500/30' : 'bg-amber-500/15 text-amber-300 border border-amber-500/30'}`}>
+                    {providerHealth.catalogAvailable ? 'Available' : 'Official API access required'}
+                  </span>
                 </div>
-                <div className="flex items-center gap-2 text-slate-400 font-mono text-[11px]">
-                  <span>Total Dynamic Titles: {catalog.length}</span>
-                </div>
+                <span className="text-slate-400 font-mono text-[11px]">{catalog.length} cached titles</span>
+              </div>
+            )}
+
+            {catalogLoading && (
+              <div role="status" className="p-5 rounded-2xl bg-slate-900/60 border border-slate-800 text-sm text-slate-300">
+                Loading Nxsha catalog…
+              </div>
+            )}
+
+            {!catalogLoading && catalogUnavailable && (
+              <div role="status" className="p-5 rounded-2xl bg-slate-900/60 border border-slate-800 text-sm text-slate-300">
+                Nxsha catalog discovery is unavailable until official API access is provided. No other catalog is used.
+                <a className="ml-2 text-violet-300 underline" href="https://nxsha.space" target="_blank" rel="noreferrer">Open Nxsha</a>
+              </div>
+            )}
+
+            {!catalogLoading && !catalogUnavailable && !catalogError && filteredCatalog.length === 0 && (
+              <div role="status" className="p-5 rounded-2xl bg-slate-900/60 border border-slate-800 text-sm text-slate-300">
+                {searchQuery ? `No Nxsha titles matched “${searchQuery}”.` : 'The Nxsha catalog is currently empty.'}
               </div>
             )}
 
@@ -1303,7 +1242,7 @@ export default function App() {
 
                             <div className="p-4 space-y-2">
                               <div className="flex items-center gap-1.5 text-xs text-slate-400 font-mono">
-                                <span className="truncate">{item.platform}</span>
+                                <span className="truncate">Nxsha</span>
                                 <span>·</span>
                                 <span>{item.year}</span>
                                 <span>·</span>
@@ -1334,11 +1273,12 @@ export default function App() {
                             <div className="flex items-center gap-2">
                               <button
                                 type="button"
+                                disabled={!playbackIsAvailable(item)}
                                 onClick={() => handleStartWatching(item)}
                                 className="flex-1 inline-flex items-center justify-center gap-1.5 px-3 py-2 text-xs font-semibold bg-gradient-to-r from-violet-600 to-fuchsia-600 hover:from-violet-500 hover:to-fuchsia-500 text-white rounded-xl transition-all whitespace-nowrap"
                               >
                                 <Play className="w-3.5 h-3.5 fill-current" />
-                                <span>Watch</span>
+                                <span>{playbackIsAvailable(item) ? 'Watch' : 'Playback unavailable'}</span>
                               </button>
 
                               <button
@@ -1394,7 +1334,7 @@ export default function App() {
                       {catalogLoadingMore ? (
                         <div className="inline-flex items-center gap-2 px-6 py-3 rounded-2xl bg-slate-900 border border-violet-500/40 text-xs sm:text-sm font-semibold text-violet-300">
                           <RefreshCw className="w-4 h-4 animate-spin text-violet-400" />
-                          <span>Loading more live titles from TMDB &amp; Nxsha...</span>
+                          <span>Loading more titles from Nxsha...</span>
                         </div>
                       ) : (
                         <button
@@ -1435,7 +1375,8 @@ export default function App() {
                 </div>
                 <div className="grid grid-cols-1 sm:grid-cols-3 gap-4">
                   {watchHistory.slice(0, 3).map((entry) => {
-                    const media = catalog.find((c) => c.id === entry.mediaId) || catalog[0];
+                    const media = catalog.find((c) => c.id === entry.mediaId);
+                    if (!media) return null;
                     const pct = Math.min(
                       100,
                       Math.round((entry.progressSeconds / (entry.durationSeconds || 3600)) * 100)
@@ -1474,227 +1415,6 @@ export default function App() {
                       </div>
                     );
                   })}
-                </div>
-              </section>
-            )}
-
-            {/* Row 2B: Official TMDB Weekly Trending Feed */}
-            {activeTab === 'home' && trendingFeed.length > 0 && (
-              <section aria-label="Trending This Week" className="space-y-4">
-                <div className="flex flex-wrap items-center justify-between gap-2">
-                  <div>
-                    <h2 className="text-xl font-display font-bold text-white flex items-center gap-2">
-                      <Flame className="w-5 h-5 text-amber-400" />
-                      <span>Trending This Week (Official TMDB)</span>
-                    </h2>
-                    <p className="text-xs text-slate-400">
-                      Live global rankings directly from TMDB API v3 · Updated hourly
-                    </p>
-                  </div>
-                  <span className="text-xs font-mono text-amber-400">🔥 TMDB Live Rank</span>
-                </div>
-
-                <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-4">
-                  {trendingFeed.slice(0, 4).map((item) => (
-                    <div
-                      key={`trending-${item.id}`}
-                      className="p-4 rounded-2xl bg-slate-900/90 border border-amber-500/20 hover:border-amber-500/40 flex flex-col justify-between space-y-3 transition-all hover:-translate-y-1 shadow-lg"
-                    >
-                      <div className="space-y-2">
-                        <div
-                          onClick={() => handleOpenMediaDetail(item)}
-                          className="relative aspect-[16/9] w-full rounded-xl overflow-hidden cursor-pointer"
-                        >
-                          <MediaPoster item={item} variant="backdrop" className="w-full h-full" />
-                          <div className="absolute top-2 left-2 px-2 py-0.5 rounded bg-slate-950/80 text-[10px] font-mono text-amber-300 uppercase">
-                            {item.mediaType}
-                          </div>
-                          <div className="absolute top-2 right-2 px-2 py-0.5 rounded bg-slate-950/80 text-[11px] font-mono text-amber-400">
-                            ★ {item.rating.toFixed(1)}
-                          </div>
-                        </div>
-                        <h3
-                          onClick={() => handleOpenMediaDetail(item)}
-                          className="text-sm font-display font-bold text-white hover:text-amber-300 cursor-pointer truncate"
-                        >
-                          {item.title}
-                        </h3>
-                        <p className="text-xs text-slate-400 line-clamp-2">{item.description}</p>
-                      </div>
-
-                      <div className="flex items-center gap-2 pt-1">
-                        <button
-                          type="button"
-                          onClick={() => handleStartWatching(item)}
-                          className="flex-1 py-1.5 px-3 rounded-xl bg-amber-500 hover:bg-amber-400 text-slate-950 text-xs font-semibold inline-flex items-center justify-center gap-1.5 transition-colors"
-                        >
-                          <Play className="w-3.5 h-3.5 fill-current" />
-                          <span>Watch</span>
-                        </button>
-                        <button
-                          type="button"
-                          title="Start Couple Watch Party"
-                          onClick={() => { void launchParty(item, 'couple'); }}
-                          className="p-1.5 bg-rose-500/20 hover:bg-rose-500 text-rose-300 hover:text-white rounded-xl transition-colors"
-                        >
-                          <Heart className="w-3.5 h-3.5" />
-                        </button>
-                      </div>
-                    </div>
-                  ))}
-                </div>
-              </section>
-            )}
-
-            {/* Row 2C: Official TMDB Popular Movies */}
-            {activeTab === 'home' && popularMoviesFeed.length > 0 && (
-              <section aria-label="Popular Movies" className="space-y-4">
-                <div className="flex flex-wrap items-center justify-between gap-2">
-                  <div>
-                    <h2 className="text-xl font-display font-bold text-white flex items-center gap-2">
-                      <Film className="w-5 h-5 text-violet-400" />
-                      <span>Popular Movies (Official TMDB)</span>
-                    </h2>
-                    <p className="text-xs text-slate-400">
-                      Top feature films streamed worldwide with synchronized playback
-                    </p>
-                  </div>
-                  <button
-                    type="button"
-                    onClick={() => {
-                      setCategoryFilter('movie');
-                      setActiveTab('movies');
-                    }}
-                    className="text-xs font-semibold text-violet-400 hover:underline"
-                  >
-                    View All Movies →
-                  </button>
-                </div>
-
-                <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-4">
-                  {popularMoviesFeed.slice(0, 4).map((item) => (
-                    <div
-                      key={`pop-movie-${item.id}`}
-                      className="p-4 rounded-2xl bg-slate-900/90 border border-violet-500/20 hover:border-violet-500/40 flex flex-col justify-between space-y-3 transition-all hover:-translate-y-1 shadow-lg"
-                    >
-                      <div className="space-y-2">
-                        <div
-                          onClick={() => handleOpenMediaDetail(item)}
-                          className="relative aspect-[16/9] w-full rounded-xl overflow-hidden cursor-pointer"
-                        >
-                          <MediaPoster item={item} variant="backdrop" className="w-full h-full" />
-                          <div className="absolute top-2 left-2 px-2 py-0.5 rounded bg-slate-950/80 text-[10px] font-mono text-violet-300">
-                            {item.durationMinutes}m
-                          </div>
-                          <div className="absolute top-2 right-2 px-2 py-0.5 rounded bg-slate-950/80 text-[11px] font-mono text-amber-400">
-                            ★ {item.rating.toFixed(1)}
-                          </div>
-                        </div>
-                        <h3
-                          onClick={() => handleOpenMediaDetail(item)}
-                          className="text-sm font-display font-bold text-white hover:text-violet-300 cursor-pointer truncate"
-                        >
-                          {item.title}
-                        </h3>
-                        <p className="text-xs text-slate-400 line-clamp-2">{item.description}</p>
-                      </div>
-
-                      <div className="flex items-center gap-2 pt-1">
-                        <button
-                          type="button"
-                          onClick={() => handleStartWatching(item)}
-                          className="flex-1 py-1.5 px-3 rounded-xl bg-violet-600 hover:bg-violet-500 text-white text-xs font-semibold inline-flex items-center justify-center gap-1.5 transition-colors"
-                        >
-                          <Play className="w-3.5 h-3.5 fill-current" />
-                          <span>Watch</span>
-                        </button>
-                        <button
-                          type="button"
-                          title="Start Group Watch Party"
-                          onClick={() => { void launchParty(item, 'group'); }}
-                          className="p-1.5 bg-indigo-500/20 hover:bg-indigo-600 text-indigo-300 hover:text-white rounded-xl transition-colors"
-                        >
-                          <Users className="w-3.5 h-3.5" />
-                        </button>
-                      </div>
-                    </div>
-                  ))}
-                </div>
-              </section>
-            )}
-
-            {/* Row 2D: Official TMDB Popular TV Series */}
-            {activeTab === 'home' && popularTvFeed.length > 0 && (
-              <section aria-label="Popular TV Shows" className="space-y-4">
-                <div className="flex flex-wrap items-center justify-between gap-2">
-                  <div>
-                    <h2 className="text-xl font-display font-bold text-white flex items-center gap-2">
-                      <Tv className="w-5 h-5 text-pink-400" />
-                      <span>Popular TV Series (Official TMDB)</span>
-                    </h2>
-                    <p className="text-xs text-slate-400">
-                      Bingeable multi-season series with episodic stream resolvers
-                    </p>
-                  </div>
-                  <button
-                    type="button"
-                    onClick={() => {
-                      setCategoryFilter('tv');
-                      setActiveTab('tv');
-                    }}
-                    className="text-xs font-semibold text-pink-400 hover:underline"
-                  >
-                    View All TV Series →
-                  </button>
-                </div>
-
-                <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-4">
-                  {popularTvFeed.slice(0, 4).map((item) => (
-                    <div
-                      key={`pop-tv-${item.id}`}
-                      className="p-4 rounded-2xl bg-slate-900/90 border border-pink-500/20 hover:border-pink-500/40 flex flex-col justify-between space-y-3 transition-all hover:-translate-y-1 shadow-lg"
-                    >
-                      <div className="space-y-2">
-                        <div
-                          onClick={() => handleOpenMediaDetail(item)}
-                          className="relative aspect-[16/9] w-full rounded-xl overflow-hidden cursor-pointer"
-                        >
-                          <MediaPoster item={item} variant="backdrop" className="w-full h-full" />
-                          <div className="absolute top-2 left-2 px-2 py-0.5 rounded bg-slate-950/80 text-[10px] font-mono text-pink-300">
-                            {item.seasons || 1} Seasons
-                          </div>
-                          <div className="absolute top-2 right-2 px-2 py-0.5 rounded bg-slate-950/80 text-[11px] font-mono text-amber-400">
-                            ★ {item.rating.toFixed(1)}
-                          </div>
-                        </div>
-                        <h3
-                          onClick={() => handleOpenMediaDetail(item)}
-                          className="text-sm font-display font-bold text-white hover:text-pink-300 cursor-pointer truncate"
-                        >
-                          {item.title}
-                        </h3>
-                        <p className="text-xs text-slate-400 line-clamp-2">{item.description}</p>
-                      </div>
-
-                      <div className="flex items-center gap-2 pt-1">
-                        <button
-                          type="button"
-                          onClick={() => handleOpenMediaDetail(item)}
-                          className="flex-1 py-1.5 px-3 rounded-xl bg-pink-600 hover:bg-pink-500 text-white text-xs font-semibold inline-flex items-center justify-center gap-1.5 transition-colors"
-                        >
-                          <span>Explore Episodes</span>
-                        </button>
-                        <button
-                          type="button"
-                          title="Start Couple Watch Party"
-                          onClick={() => { void launchParty(item, 'couple'); }}
-                          className="p-1.5 bg-rose-500/20 hover:bg-rose-500 text-rose-300 hover:text-white rounded-xl transition-colors"
-                        >
-                          <Heart className="w-3.5 h-3.5" />
-                        </button>
-                      </div>
-                    </div>
-                  ))}
                 </div>
               </section>
             )}
@@ -1978,7 +1698,7 @@ export default function App() {
         )}
 
         {/* ACTIVE COUPLE CINEMA ROOM OR GROUP CINEMA ROOM */}
-        {(activeTab === 'couple-room' || activeTab === 'group-room') && (
+        {(activeTab === 'couple-room' || activeTab === 'group-room') && selectedMedia && (
           <WatchPartyWorkspace
             catalog={catalog}
             selectedMedia={selectedMedia}
@@ -1993,7 +1713,7 @@ export default function App() {
         )}
 
         {/* MEDIA DETAIL VIEW */}
-        {activeTab === 'media-detail' && (
+        {activeTab === 'media-detail' && selectedMedia && (
           <MediaDetailView
             item={selectedMedia}
             relatedItems={catalog.filter((c) => c.id !== selectedMedia.id)}
@@ -2025,7 +1745,7 @@ export default function App() {
         )}
 
         {/* AI COMPANION & CURATOR VIEW */}
-        {activeTab === 'ai-voice' && (
+        {activeTab === 'ai-voice' && selectedMedia && (
           <AiVoiceAndConcierge
             catalog={catalog}
             history={watchHistory}
@@ -2049,7 +1769,8 @@ export default function App() {
             onDownloadMedia={handleDownloadMedia}
             onRemoveDownload={handleRemoveDownload}
             onPlayDownloaded={(mediaId) => {
-              const found = catalog.find((c) => c.id === mediaId) || catalog[0];
+              const found = catalog.find((c) => c.id === mediaId);
+              if (!found) { triggerBanner('This saved title is no longer available in the Nxsha catalog.'); return; }
               setSelectedMedia(found);
               setActiveTab('home');
               setIsTheaterOpen(true);

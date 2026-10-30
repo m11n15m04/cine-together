@@ -60,13 +60,13 @@ export const OfflineAndSocialWorkspace: React.FC<OfflineAndSocialWorkspaceProps>
   onMarkAllNotificationsRead,
 }) => {
   const [selectedDownloadMediaId, setSelectedDownloadMediaId] = useState<string>(
-    catalog[0]?.id || 'nx-1400940'
+    catalog[0]?.id || ''
   );
   const [selectedDownloadQuality, setSelectedDownloadQuality] =
     useState<QualityTier>('1080p FHD');
 
   // Social Broadcast Form State
-  const [shareMediaId, setShareMediaId] = useState<string>(catalog[0]?.id || 'nx-1400940');
+  const [shareMediaId, setShareMediaId] = useState<string>(catalog[0]?.id || '');
   const [shareTimestamp, setShareTimestamp] = useState<string>('24:15');
   const [sharePlatform, setSharePlatform] =
     useState<SocialBroadcastPost['platformTarget']>('Community Feed');
@@ -90,7 +90,8 @@ export const OfflineAndSocialWorkspace: React.FC<OfflineAndSocialWorkspaceProps>
     e.preventDefault();
     const trimmed = shareCaption.trim();
     if (!trimmed) return;
-    const media = catalog.find((c) => c.id === shareMediaId) || catalog[0];
+    const media = catalog.find((c) => c.id === shareMediaId);
+    if (!media) return;
     onCreateSocialPost({
       authorName: 'Alex Rivera',
       authorHandle: '@alex_nxsha',
@@ -118,8 +119,7 @@ export const OfflineAndSocialWorkspace: React.FC<OfflineAndSocialWorkspaceProps>
               </h2>
             </div>
             <p className="text-sm text-slate-400">
-              Download titles from <span className="font-mono text-slate-300">nxsha.space</span> in
-              AV1/HEVC containers for uninterrupted playback without an active internet connection.
+              Offline downloads are unavailable. This app does not fetch or store media from Nxsha.
             </p>
           </div>
 
@@ -171,8 +171,10 @@ export const OfflineAndSocialWorkspace: React.FC<OfflineAndSocialWorkspaceProps>
                 id="offline-title-select"
                 value={selectedDownloadMediaId}
                 onChange={(e) => setSelectedDownloadMediaId(e.target.value)}
+                disabled={catalog.length === 0}
                 className="w-full px-3 py-1.5 text-xs bg-slate-900 border border-slate-800 rounded-lg text-slate-100"
               >
+                {catalog.length === 0 && <option value="">Nxsha catalog unavailable</option>}
                 {catalog.map((c) => (
                   <option key={c.id} value={c.id}>
                     {c.title} ({c.durationMinutes}m)
@@ -210,6 +212,7 @@ export const OfflineAndSocialWorkspace: React.FC<OfflineAndSocialWorkspaceProps>
               <button
                 type="button"
                 onClick={handleQueueNewDownload}
+                disabled={catalog.length === 0}
                 className="inline-flex items-center gap-1.5 px-4 py-2 text-xs font-semibold bg-amber-500 hover:bg-amber-400 text-slate-950 rounded-lg transition-colors whitespace-nowrap shrink-0"
               >
                 <Download className="w-3.5 h-3.5" />
@@ -302,8 +305,10 @@ export const OfflineAndSocialWorkspace: React.FC<OfflineAndSocialWorkspaceProps>
                   id="share-media-select"
                   value={shareMediaId}
                   onChange={(e) => setShareMediaId(e.target.value)}
+                  disabled={catalog.length === 0}
                   className="w-full px-2.5 py-1.5 text-xs bg-slate-900 border border-slate-800 rounded-lg text-slate-100"
                 >
+                  {catalog.length === 0 && <option value="">Nxsha catalog unavailable</option>}
                   {catalog.map((c) => (
                     <option key={c.id} value={c.id}>
                       {c.title}
@@ -358,6 +363,7 @@ export const OfflineAndSocialWorkspace: React.FC<OfflineAndSocialWorkspaceProps>
               />
               <button
                 type="submit"
+                disabled={catalog.length === 0}
                 className="inline-flex items-center gap-1.5 px-4 py-2 text-xs font-semibold bg-amber-500 hover:bg-amber-400 text-slate-950 rounded-lg transition-colors whitespace-nowrap shrink-0"
               >
                 {broadcastSuccess ? (

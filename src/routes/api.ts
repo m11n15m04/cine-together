@@ -1,7 +1,6 @@
 import crypto from 'node:crypto';
 import { Router, type NextFunction, type Request, type Response } from 'express';
 import { GoogleGenAI } from '@google/genai';
-import { INITIAL_CATALOG } from '../data/catalog.ts';
 import { checkDatabaseConnection } from '../db/index.ts';
 import {
   addUserWatchlistItem,
@@ -23,13 +22,9 @@ import { createGuestSession, createRoomAccessToken } from '../security/tokens.ts
 import { getAuthorizedMediaSource } from '../services/mediaSources.ts';
 import {
   checkCatalogHealth,
-  fetchFullNxshaCatalog,
-  getTmdbPopularMovies,
-  getTmdbPopularTv,
-  getTmdbTrending,
-  getTmdbTvSeasons,
-  searchNxsha,
-  searchTmdb,
+  NXSHA_CATALOG_UNAVAILABLE,
+  nxshaCatalogCacheKey,
+  readNxshaCatalogCache,
 } from '../services/catalogService.ts';
 import type { MediaItem } from '../types.ts';
 
@@ -106,11 +101,41 @@ function withPlaybackAvailability(item: MediaItem): MediaItem {
   const source = getAuthorizedMediaSource(item.id);
   return {
     ...item,
-    platform: source?.type === 'external' ? item.platform : 'Unverified',
+    platform: 'Unverified',
     playbackStatus: source ? (source.type === 'external' ? 'external-watch' : 'synced-ready') : 'metadata-only',
     authorizedSourceType: source?.type,
     authorizedProviderUrl: source?.type === 'external' ? source.url : undefined,
   };
+}
+
+function addPlaybackAvailability(payload: unknown): unknown {
+  const decorate = (value: unknown): unknown => {
+    if (!value || typeof value !== 'object' || Array.isArray(value)) return value;
+    const item = value as Partial<MediaItem>;
+    if (typeof item.id !== 'string' || !item.id || !['movie', 'tv', 'anime'].includes(String(item.mediaType))) return value;
+    return withPlaybackAvailability(value as MediaItem);
+  };
+  if (Array.isArray(payload)) return payload.map(decorate);
+  if (payload && typeof payload === 'object') {
+    const record = payload as Record<string, unknown>;
+    if (Array.isArray(record.items)) return { ...record, items: record.items.map(decorate) };
+    if (record.item) return { ...record, item: decorate(record.item) };
+  }
+  return decorate(payload);
+}
+
+async function cachedCatalogResponse(res: Response, cacheKey: string): Promise<unknown> {
+  try {
+    const cached = await readNxshaCatalogCache<unknown>(cacheKey);
+    if (cached !== null) return res.json(addPlaybackAvailability(cached));
+  } catch {
+    // A database/cache failure never triggers an undocumented provider request or a catalog fallback.
+  }
+  return res.status(503).json({
+    ...NXSHA_CATALOG_UNAVAILABLE,
+    items: [],
+    cache: 'miss_or_expired',
+  });
 }
 
 function userId(req: AuthRequest): string {
@@ -137,7 +162,10 @@ export function createApiRouter(): Router {
       timestamp: new Date().toISOString(),
     });
   }));
-  router.get('/health/catalog', asyncRoute(async (_req, res) => res.json(await checkCatalogHealth())));
+  router.get('/health/catalog', asyncRoute(async (_req, res) => {
+    const health = await checkCatalogHealth();
+    return res.status(503).json(health);
+  }));
 
   router.post('/auth/guest-session', authRateLimit, asyncRoute(async (req, res) => {
     const name = text(bodyObject(req).displayName || 'Cinema Guest', 'displayName', 48);
@@ -145,81 +173,47 @@ export function createApiRouter(): Router {
   }));
 
   router.get('/catalog/feed', asyncRoute(async (req, res) => {
-    const section = String(req.query.section || 'all').slice(0, 32);
+    const section = String(req.query.section || 'all').slice(0, 32).toLowerCase();
     const page = Math.max(1, Math.min(500, Number(req.query.page) || 1));
     const pageSize = Math.max(1, Math.min(100, Number(req.query.pageSize) || 24));
-    let items: MediaItem[] = [];
-    let source = 'catalog';
-    let totalCount = 0;
-    let totalPages = 0;
-    let sections: Array<{ heading: string; tabKey: string; count: number }> = [];
-    let liveConnected = false;
-    if (section === 'trending') {
-      const result = await getTmdbTrending(page);
-      items = result.items;
-      totalCount = result.totalResults;
-      totalPages = result.totalPages;
-      liveConnected = result.ok;
-      source = 'TMDB trending metadata';
-    } else if (section === 'popular-movies' || section === 'popular-tv') {
-      const result = section === 'popular-movies' ? await getTmdbPopularMovies(page) : await getTmdbPopularTv(page);
-      items = result.items;
-      totalCount = result.totalResults;
-      totalPages = result.totalPages;
-      liveConnected = result.ok;
-      source = 'TMDB popular metadata';
-    } else {
-      const catalog = await fetchFullNxshaCatalog();
-      const tab = section === 'movie' || section === 'tv' || section === 'anime' ? section : 'home';
-      items = tab === 'home' ? catalog.items : catalog.byTab[tab] || [];
-      totalCount = items.length;
-      totalPages = Math.ceil(totalCount / pageSize);
-      sections = catalog.sections;
-      liveConnected = catalog.liveConnected;
-      source = 'Nxsha metadata catalog';
-    }
-    const offset = (page - 1) * pageSize;
-    return res.json({
-      source,
-      liveConnected,
-      isDemoFallback: false,
-      totalCount: Math.min(totalCount, pageSize),
-      totalCatalogSize: totalCount,
-      page,
-      pageSize,
-      totalPages,
-      hasMore: page < totalPages,
-      sections,
-      items: items.slice(offset, offset + pageSize).map(withPlaybackAvailability),
-    });
+    return cachedCatalogResponse(res, nxshaCatalogCacheKey('feed', { section, page, pageSize }));
   }));
 
   router.get('/catalog/search', asyncRoute(async (req, res) => {
     const query = text(typeof req.query.q === 'string' ? req.query.q : '', 'q', 120);
-    const typeParam = ['movie', 'tv'].includes(String(req.query.type)) ? String(req.query.type) as 'movie' | 'tv' : 'all';
+    const typeParam = ['movie', 'tv', 'anime', 'all'].includes(String(req.query.type)) ? String(req.query.type) : 'all';
     const page = Math.max(1, Math.min(100, Number(req.query.page) || 1));
-    const [tmdb, nxsha] = await Promise.all([searchTmdb(query, typeParam, page), searchNxsha(query)]);
-    const merged = new Map<string, MediaItem>();
-    for (const item of [...tmdb.items, ...nxsha]) if (!merged.has(item.id)) merged.set(item.id, item);
-    const all = [...merged.values()];
-    return res.json({ query, liveSearchUsed: tmdb.ok || nxsha.length > 0, page, totalPages: tmdb.totalPages, totalResults: Math.max(tmdb.totalResults, all.length), providers: ['TMDB', 'Nxsha'], items: all.slice(0, 100).map(withPlaybackAvailability) });
+    return cachedCatalogResponse(res, nxshaCatalogCacheKey('search', { query, type: typeParam, page }));
   }));
   router.get('/nxsha/feed', asyncRoute(async (req, res) => {
-    const catalog = await fetchFullNxshaCatalog();
-    const tab = ['home', 'movie', 'tv', 'anime'].includes(String(req.query.tab)) ? String(req.query.tab) : 'home';
-    const items = (tab === 'home' ? catalog.items : catalog.byTab[tab] || []).map(withPlaybackAvailability);
-    return res.json({ source: 'Nxsha metadata catalog', liveConnected: catalog.liveConnected, isDemoFallback: false, items, sections: catalog.sections, totalCount: items.length });
+    const section = String(req.query.tab || req.query.tabKey || 'all').slice(0, 32).toLowerCase();
+    const page = Math.max(1, Math.min(500, Number(req.query.page) || 1));
+    const pageSize = Math.max(1, Math.min(100, Number(req.query.pageSize) || 24));
+    return cachedCatalogResponse(res, nxshaCatalogCacheKey('feed', { section, page, pageSize }));
   }));
   router.get('/nxsha/search', asyncRoute(async (req, res) => {
     const query = text(typeof req.query.q === 'string' ? req.query.q : '', 'q', 120);
-    const items = await searchNxsha(query);
-    return res.json({ query, source: 'Nxsha metadata search', items: items.map(withPlaybackAvailability) });
+    const typeParam = ['movie', 'tv', 'anime', 'all'].includes(String(req.query.type)) ? String(req.query.type) : 'all';
+    const page = Math.max(1, Math.min(100, Number(req.query.page) || 1));
+    return cachedCatalogResponse(res, nxshaCatalogCacheKey('search', { query, type: typeParam, page }));
   }));
-  router.get('/nxsha/tv/:tmdbId/seasons', asyncRoute(async (req, res) => {
-    const id = Number(req.params.tmdbId);
-    if (!Number.isSafeInteger(id) || id <= 0) throw new HttpError(400, 'TMDB ID is invalid.');
-    const result = await getTmdbTvSeasons(id, String(req.query.title || '').slice(0, 120));
-    return res.json(result);
+  router.get('/catalog/:providerId/seasons/:seasonNumber/episodes', asyncRoute(async (req, res) => {
+    const seasonNumber = Number(req.params.seasonNumber);
+    if (!Number.isSafeInteger(seasonNumber) || seasonNumber < 0) throw new HttpError(400, 'Season number is invalid.');
+    const providerId = text(req.params.providerId, 'providerId', 160);
+    return cachedCatalogResponse(res, nxshaCatalogCacheKey('episodes', { providerId, seasonNumber }));
+  }));
+  router.get('/catalog/:providerId/seasons', asyncRoute(async (req, res) => {
+    const providerId = text(req.params.providerId, 'providerId', 160);
+    return cachedCatalogResponse(res, nxshaCatalogCacheKey('seasons', { providerId }));
+  }));
+  router.get('/catalog/:providerId', asyncRoute(async (req, res) => {
+    const providerId = text(req.params.providerId, 'providerId', 160);
+    return cachedCatalogResponse(res, nxshaCatalogCacheKey('details', { providerId }));
+  }));
+  router.get('/nxsha/tv/:providerId/seasons', asyncRoute(async (req, res) => {
+    const providerId = text(req.params.providerId, 'providerId', 160);
+    return cachedCatalogResponse(res, nxshaCatalogCacheKey('seasons', { providerId }));
   }));
 
   router.get('/media/availability/:id', asyncRoute(async (req, res) => {
@@ -389,4 +383,4 @@ export function createApiRouter(): Router {
   return router;
 }
 
-export const _routeTestUtils = { withPlaybackAvailability, roomCode, finiteNumber, text, initialCatalogSize: INITIAL_CATALOG.length };
+export const _routeTestUtils = { withPlaybackAvailability, roomCode, finiteNumber, text };

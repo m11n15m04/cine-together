@@ -8,7 +8,7 @@ interface MediaPosterProps {
 }
 
 /**
- * Renders live TMDB/Nxsha poster or backdrop artwork when available,
+ * Renders provider supplied poster or backdrop artwork when available,
  * with automatic fallback to deterministic SVG cinema artwork.
  */
 export const MediaPoster: React.FC<MediaPosterProps> = ({
@@ -24,8 +24,11 @@ export const MediaPoster: React.FC<MediaPosterProps> = ({
     ? item.backdropUrl || item.posterUrl
     : item.posterUrl || item.backdropUrl;
 
-  // Deterministic geometric variation from tmdbId
-  const seed = item.tmdbId || 1001;
+  // Stable decorative variation from Nxsha's native catalog ID, not a player identifier.
+  const seed = Array.from(item.providerId || item.id).reduce(
+    (value, character) => ((value * 31 + character.charCodeAt(0)) >>> 0),
+    7
+  );
   const cx = isBackdrop ? 860 + (seed % 160) : 240 + ((seed % 80) - 40);
   const cy = isBackdrop ? 280 + (seed % 120) : 240 + ((seed % 60) - 30);
   const ringRadius = isBackdrop ? 210 + (seed % 70) : 120 + (seed % 45);

@@ -52,6 +52,19 @@ export const mediaItems = pgTable(
   (table) => [index('media_items_type_idx').on(table.mediaType)]
 );
 
+// Separate cache for metadata retrieved through an authorized Nxsha catalog API.
+// Catalog refreshes never overwrite legacy media or user records.
+export const nxshaCatalogCache = pgTable(
+  'nxsha_catalog_cache',
+  {
+    cacheKey: text('cache_key').primaryKey(),
+    payload: jsonb('payload').notNull(),
+    refreshedAt: timestamp('refreshed_at').defaultNow().notNull(),
+    expiresAt: timestamp('expires_at').notNull(),
+  },
+  (table) => [index('nxsha_catalog_cache_expires_idx').on(table.expiresAt)]
+);
+
 // 3. watch_rooms
 export const watchRooms = pgTable(
   'watch_rooms',

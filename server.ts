@@ -7,7 +7,6 @@ import { createServer as createViteServer } from 'vite';
 import { assertSecurityConfiguration } from './src/security/tokens.ts';
 import { assertMediaSourceConfiguration } from './src/services/mediaSources.ts';
 import { checkDatabaseConnection, closeDatabaseConnection, getDatabaseTargetInfo } from './src/db/index.ts';
-import { seedDemoCatalog } from './src/db/repository.ts';
 import { createApiRouter } from './src/routes/api.ts';
 import { attachPartyHub } from './src/realtime/partyHub.ts';
 
@@ -57,7 +56,6 @@ async function startServer() {
   if (isProduction && !database.available) {
     throw new Error(`PostgreSQL is unavailable at startup (${database.errorCode || 'connection_error'}).`);
   }
-  if (database.available && process.env.SEED_DEMO_DATA === 'true') await seedDemoCatalog();
   if (!database.available) {
     console.warn(`[STARTUP] PostgreSQL is unavailable (${database.errorCode || 'connection_error'}); persistence routes will return 503.`);
   }

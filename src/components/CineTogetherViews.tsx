@@ -34,9 +34,14 @@ import {
 import { ROOM_THEMES } from '../data/catalog';
 import { MediaPoster } from './MediaPoster';
 
+function nxshaEmbedIdentifier(item: MediaItem): string | null {
+  if (Number.isSafeInteger(item.tmdbId) && Number(item.tmdbId) > 0) return String(item.tmdbId);
+  return item.imdbId && /^tt\d{7,10}$/.test(item.imdbId) ? item.imdbId : null;
+}
+
 interface CreateJoinPartyViewProps {
   catalog: MediaItem[];
-  defaultMedia: MediaItem;
+  defaultMedia: MediaItem | null;
   userProfile: UserProfile;
   onLaunchRoom: (params: {
     mode: RoomMode;
@@ -52,8 +57,8 @@ export const CreateJoinPartyView: React.FC<CreateJoinPartyViewProps> = ({
   onLaunchRoom,
 }) => {
   const [selectedMode, setSelectedMode] = useState<RoomMode>('couple');
-  const [roomTitle, setRoomTitle] = useState<string>('Kyoto Rain & Rose Nebula Date Night');
-  const [selectedMediaId, setSelectedMediaId] = useState<string>(defaultMedia.id);
+  const [roomTitle, setRoomTitle] = useState<string>('Private watch party');
+  const [selectedMediaId, setSelectedMediaId] = useState<string>(defaultMedia?.id || '');
   const [selectedTheme, setSelectedTheme] = useState<RoomThemeId>('rose-nebula');
   const [roomPassword, setRoomPassword] = useState<string>('');
   const [maxParticipants, setMaxParticipants] = useState<number>(10);
@@ -69,11 +74,11 @@ export const CreateJoinPartyView: React.FC<CreateJoinPartyViewProps> = ({
   const handleSelectModeCard = (mode: RoomMode) => {
     setSelectedMode(mode);
     if (mode === 'couple') {
-      setRoomTitle('Kyoto Rain & Rose Nebula Date Night');
+      setRoomTitle('Private watch party');
       setSelectedTheme('rose-nebula');
       setCollaborativeControls(true);
     } else {
-      setRoomTitle('Friday Night Group Premiere Lounge');
+      setRoomTitle('Group watch party');
       setSelectedTheme('midnight-violet');
       setCollaborativeControls(false);
     }
@@ -84,6 +89,11 @@ export const CreateJoinPartyView: React.FC<CreateJoinPartyViewProps> = ({
     setCreating(true);
     const chosenMedia = catalog.find((c) => c.id === selectedMediaId) || defaultMedia;
     setCreateError(null);
+    if (!chosenMedia) {
+      setCreateError('Nxsha catalog metadata is unavailable, so a media title cannot be selected.');
+      setCreating(false);
+      return;
+    }
 
     try {
       const resp = await apiFetch('/api/party/rooms', {
@@ -122,7 +132,7 @@ export const CreateJoinPartyView: React.FC<CreateJoinPartyViewProps> = ({
     e.preventDefault();
     const cleanCode = joinCodeInput.trim().toUpperCase();
     if (!cleanCode) {
-      setJoinError('Please enter a room code (e.g. LOVE-2026 or CLUB-4096).');
+      setJoinError('Please enter the invite code for your watch party.');
       return;
     }
     setJoinError(null);
@@ -141,13 +151,18 @@ export const CreateJoinPartyView: React.FC<CreateJoinPartyViewProps> = ({
         setJoinError('The server did not return a room invitation.');
         return;
       }
+      const roomMedia = catalog.find((item) => item.id === data.room?.mediaId) || defaultMedia;
+      if (!roomMedia) {
+        setJoinError('This room’s title is not available from the Nxsha catalog, so the media workspace cannot be opened.');
+        return;
+      }
       saveRoomAccessToken(cleanCode, data.roomAccessToken);
       const mode: RoomMode =
         data.mode === 'couple' || cleanCode.startsWith('LOVE') ? 'couple' : 'group';
       onLaunchRoom({
         mode,
         roomCode: cleanCode,
-        media: catalog.find((item) => item.id === data.room?.mediaId) || defaultMedia,
+        media: roomMedia,
       });
     } catch (error) {
       setJoinError(error instanceof Error ? error.message : 'Could not verify the room.');
@@ -297,8 +312,10 @@ export const CreateJoinPartyView: React.FC<CreateJoinPartyViewProps> = ({
                 id="create-room-media"
                 value={selectedMediaId}
                 onChange={(e) => setSelectedMediaId(e.target.value)}
+                disabled={catalog.length === 0}
                 className="w-full px-3.5 py-2.5 text-sm bg-slate-950 border border-slate-800 rounded-xl text-white focus:outline-none focus:border-violet-500"
               >
+                {catalog.length === 0 && <option value="">Nxsha catalog unavailable</option>}
                 {catalog.map((item) => (
                   <option key={item.id} value={item.id}>
                     {item.title} ({item.year}) · ★ {item.rating}
@@ -372,7 +389,7 @@ export const CreateJoinPartyView: React.FC<CreateJoinPartyViewProps> = ({
 
           <button
             type="submit"
-            disabled={creating}
+            disabled={creating || !defaultMedia && catalog.length === 0}
             data-testid="launch-watch-party-btn"
             className={`w-full py-3.5 px-6 rounded-2xl font-display font-bold text-sm text-white shadow-xl transition-all flex items-center justify-center gap-2 ${
               selectedMode === 'couple'
@@ -415,7 +432,7 @@ export const CreateJoinPartyView: React.FC<CreateJoinPartyViewProps> = ({
               <input
                 id="join-room-code-input"
                 type="text"
-                placeholder="e.g. LOVE-2026 or CLUB-4096"
+                placeholder="Enter your invite code"
                 value={joinCodeInput}
                 onChange={(e) => setJoinCodeInput(e.target.value.toUpperCase())}
                 className="w-full px-3.5 py-2.5 text-sm font-mono uppercase bg-slate-950 border border-slate-800 rounded-xl text-white focus:outline-none focus:border-violet-500"
@@ -492,23 +509,33 @@ export const MediaDetailView: React.FC<MediaDetailViewProps> = ({
   const [selectedEpisodeNum, setSelectedEpisodeNum] = useState<number>(1);
   const [episodesLoading, setEpisodesLoading] = useState<boolean>(false);
   const [episodeSourceLabel, setEpisodeSourceLabel] = useState<string>('');
+  const [episodesUnavailable, setEpisodesUnavailable] = useState<boolean>(false);
 
   useEffect(() => {
     if (!isEpisodic) {
       setSeasons([]);
       return;
     }
+    if (!item.providerId) {
+      setSeasons([]);
+      setEpisodesUnavailable(true);
+      setEpisodesLoading(false);
+      return;
+    }
     let active = true;
     setEpisodesLoading(true);
+    setEpisodesUnavailable(false);
     setSelectedSeasonNum(1);
     setSelectedEpisodeNum(1);
 
-    fetch(
-      `/api/nxsha/tv/${encodeURIComponent(String(item.tmdbId))}/seasons?title=${encodeURIComponent(item.title)}`
-    )
-      .then((r) => r.json())
-      .then((data) => {
+    fetch(`/api/catalog/${encodeURIComponent(item.providerId)}/seasons`)
+      .then(async (response) => ({ response, data: await response.json() }))
+      .then(({ response, data }) => {
         if (!active) return;
+        if (!response.ok) {
+          setEpisodesUnavailable(true);
+          return;
+        }
         if (Array.isArray(data.seasons) && data.seasons.length > 0) {
           setSeasons(data.seasons);
           setSelectedSeasonNum(data.seasons[0].seasonNumber || 1);
@@ -516,7 +543,7 @@ export const MediaDetailView: React.FC<MediaDetailViewProps> = ({
           setEpisodeSourceLabel(String(data.source || 'Episode metadata'));
         }
       })
-      .catch(() => {})
+      .catch(() => { if (active) setEpisodesUnavailable(true); })
       .finally(() => {
         if (active) setEpisodesLoading(false);
       });
@@ -524,7 +551,7 @@ export const MediaDetailView: React.FC<MediaDetailViewProps> = ({
     return () => {
       active = false;
     };
-  }, [item.tmdbId, item.title, isEpisodic]);
+  }, [item.providerId, isEpisodic]);
 
   const currentSeason =
     seasons.find((s) => s.seasonNumber === selectedSeasonNum) || seasons[0] || null;
@@ -558,12 +585,12 @@ export const MediaDetailView: React.FC<MediaDetailViewProps> = ({
         <div className="p-6 sm:p-10 relative -mt-36 sm:-mt-48 z-10 max-w-3xl space-y-5">
           <div className="flex flex-wrap items-center gap-2 text-xs font-mono">
             <span className="px-2.5 py-1 rounded-md bg-violet-500/20 text-violet-300 border border-violet-500/30 font-semibold">
-              {item.platform}
+              Nxsha catalog
             </span>
             <span className="px-2.5 py-1 rounded-md bg-slate-900/90 text-slate-300 border border-slate-700 uppercase">
               {item.mediaType}
             </span>
-            <span className="text-amber-400 font-semibold">★ {item.rating.toFixed(1)}</span>
+            {Number.isFinite(item.rating) && <span className="text-amber-400 font-semibold">★ {item.rating.toFixed(1)}</span>}
             <span className="text-slate-400">·</span>
             <span className="text-slate-300">{item.year}</span>
             <span className="text-slate-400">·</span>
@@ -600,19 +627,22 @@ export const MediaDetailView: React.FC<MediaDetailViewProps> = ({
               <span className="text-slate-500">Genres:</span>{' '}
               <span className="text-slate-200 font-medium">{item.genres.join(' · ')}</span>
             </div>
-            <div>
-              <span className="text-slate-500">Nxsha Route:</span>{' '}
-              <span className="text-violet-300 font-mono">
-                {isEpisodic
-                  ? `/embed/tv/${item.tmdbId}/${selectedSeasonNum}/${selectedEpisodeNum}`
-                  : `/embed/movie/${item.tmdbId}`}
-              </span>
-            </div>
+            {nxshaEmbedIdentifier(item) ? (
+              <a
+                className="inline-flex text-violet-300 underline"
+                href={`https://web.nxsha.space/embed/${isEpisodic ? `tv/${nxshaEmbedIdentifier(item)}/${selectedSeasonNum}/${selectedEpisodeNum}` : `movie/${nxshaEmbedIdentifier(item)}`}`}
+                target="_blank"
+                rel="noreferrer"
+              >Open documented Nxsha player route (availability not verified)</a>
+            ) : (
+              <span>Documented player route unavailable: Nxsha did not supply a TMDb or IMDb identifier.</span>
+            )}
           </div>
 
           <div className="flex flex-wrap items-center gap-3 pt-2">
             <button
               type="button"
+              disabled={item.playbackStatus !== 'synced-ready' && item.playbackStatus !== 'external-watch'}
               onClick={() =>
                 onWatchSolo(buildEpisodicMediaItem(selectedSeasonNum, selectedEpisodeNum))
               }
@@ -621,8 +651,12 @@ export const MediaDetailView: React.FC<MediaDetailViewProps> = ({
               <Play className="w-4 h-4 fill-current" />
               <span>
                 {isEpisodic
-                  ? `Watch S${selectedSeasonNum}·E${selectedEpisodeNum} Now`
-                  : 'Watch Solo Now'}
+                  ? item.playbackStatus === 'synced-ready' || item.playbackStatus === 'external-watch'
+                    ? `Watch S${selectedSeasonNum}·E${selectedEpisodeNum} Now`
+                    : 'Playback unavailable'
+                  : item.playbackStatus === 'synced-ready' || item.playbackStatus === 'external-watch'
+                    ? 'Watch Solo Now'
+                    : 'Playback unavailable'}
               </span>
             </button>
 
@@ -690,11 +724,11 @@ export const MediaDetailView: React.FC<MediaDetailViewProps> = ({
               <div className="flex items-center gap-2">
                 <Tv className="w-5 h-5 text-violet-400" />
                 <h2 className="text-lg font-display font-bold text-white">
-                  Seasons &amp; Episodes ({seasons.length || item.seasons || 1} Seasons)
+                  Seasons &amp; Episodes{seasons.length ? ` (${seasons.length} seasons)` : ''}
                 </h2>
               </div>
               <p className="text-xs text-slate-400 mt-0.5">
-                {episodeSourceLabel || 'Select a season and episode to stream solo or in a Watch Party'}
+                {episodeSourceLabel || 'Season data is loaded from the Nxsha catalog when available.'}
               </p>
             </div>
 
@@ -746,6 +780,7 @@ export const MediaDetailView: React.FC<MediaDetailViewProps> = ({
                   <div className="flex items-center gap-2">
                     <button
                       type="button"
+                      disabled={item.playbackStatus !== 'synced-ready' && item.playbackStatus !== 'external-watch'}
                       onClick={() =>
                         onWatchSolo(
                           buildEpisodicMediaItem(
@@ -806,6 +841,7 @@ export const MediaDetailView: React.FC<MediaDetailViewProps> = ({
                           onWatchSolo(buildEpisodicMediaItem(ep.seasonNumber, ep.episodeNumber));
                         }}
                         aria-label={`Play Season ${ep.seasonNumber} Episode ${ep.episodeNumber}`}
+                      disabled={item.playbackStatus !== 'synced-ready' && item.playbackStatus !== 'external-watch'}
                         className="p-2 rounded-xl bg-violet-600/20 hover:bg-violet-600 text-violet-200 hover:text-white shrink-0 transition-colors"
                       >
                         <Play className="w-3.5 h-3.5 fill-current" />
@@ -815,7 +851,11 @@ export const MediaDetailView: React.FC<MediaDetailViewProps> = ({
                 })}
               </div>
             </>
-          ) : null}
+          ) : episodesUnavailable ? (
+            <p role="status" className="text-sm text-amber-200">Nxsha season and episode metadata is unavailable. The catalog API is not currently documented for this request.</p>
+          ) : (
+            <p role="status" className="text-sm text-slate-400">No season metadata is available.</p>
+          )}
         </div>
       )}
 

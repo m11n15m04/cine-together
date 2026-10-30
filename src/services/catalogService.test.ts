@@ -1,29 +1,33 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
+import {
+  checkCatalogHealth,
+  NXSHA_CATALOG_UNAVAILABLE,
+  nxshaCatalogCacheKey,
+  NxshaCatalogUnavailableError,
+} from './catalogService.ts';
 
-process.env.NODE_ENV = 'test';
-process.env.TMDB_API_KEY = 'tests-only-tmdb-key';
-const originalFetch = globalThis.fetch;
-let fetchCount = 0;
-globalThis.fetch = async () => {
-  fetchCount += 1;
-  return new Response(JSON.stringify({ page: 1, total_pages: 1, total_results: 0, results: [] }), {
-    status: 200,
-    headers: { 'content-type': 'application/json' },
-  });
-};
-const { fetchTmdbEndpoint } = await import('./catalogService.ts');
-
-test('TMDB catalog responses are cached and concurrent-ready by endpoint and page', async () => {
-  const first = await fetchTmdbEndpoint('/movie/popular', { page: 900_001 });
-  const second = await fetchTmdbEndpoint('/movie/popular', { page: 900_001 });
-  assert.equal(first.ok, true);
-  assert.equal(second.ok, true);
-  assert.equal(fetchCount, 1);
-  assert.equal(second.durationMs, 0);
+test('catalog health reports Nxsha catalog access as unavailable while player embeds are documented', async () => {
+  const health = await checkCatalogHealth();
+  assert.equal(health.status, 'unavailable');
+  assert.equal(health.provider.name, 'Nxsha');
+  assert.equal(health.provider.catalogApi.documented, false);
+  assert.equal(health.provider.catalogApi.status, 'unavailable');
+  assert.equal(health.provider.playerIntegration.status, 'documented');
 });
 
-test.after(() => {
-  globalThis.fetch = originalFetch;
-  delete process.env.TMDB_API_KEY;
+test('catalog unavailable error is an explicit 503 and does not select a fallback provider', () => {
+  const error = new NxshaCatalogUnavailableError();
+  assert.equal(error.status, 503);
+  assert.equal(error.code, NXSHA_CATALOG_UNAVAILABLE.code);
+  assert.match(error.message, /authorized API access/i);
+});
+
+test('catalog cache keys are stable, scoped and do not reveal search terms', () => {
+  const first = nxshaCatalogCacheKey('search', { query: 'a private search', type: 'all', page: 1 });
+  const reordered = nxshaCatalogCacheKey('search', { page: 1, type: 'all', query: 'a private search' });
+  const differentQuery = nxshaCatalogCacheKey('search', { query: 'another title', type: 'all', page: 1 });
+  assert.equal(first, reordered);
+  assert.notEqual(first, differentQuery);
+  assert.doesNotMatch(first, /private search/i);
 });

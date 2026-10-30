@@ -153,7 +153,6 @@ test('MediaProviderAdapter exposes only configured sources and honest sync flags
     providerType: 'synced-studio',
     streamUrl: 'https://media.example.test/authorized.mp4',
     mediaType: 'movie',
-    tmdbId: 969681,
     durationMinutes: 142,
   });
   assert.equal(syncedAdapter.supportsProgrammaticSync, true);
@@ -167,7 +166,6 @@ test('MediaProviderAdapter exposes only configured sources and honest sync flags
     providerType: 'authorized-external',
     openOnProviderUrl: 'https://provider.example.test/watch/authorized-title',
     mediaType: 'tv',
-    tmdbId: 204988,
     season: 1,
     episode: 4,
     durationMinutes: 52,
@@ -226,6 +224,17 @@ test('deduplicateAndMergeCatalog and paginateCatalog prevent duplicates and pagi
   const page2 = paginateCatalog(merged, 2, 2);
   assert.equal(page2.visibleItems.length, 3);
   assert.equal(page2.hasMore, false);
+});
+
+test('catalog identity is preserved by Nxsha provider ID rather than TMDb player ID', () => {
+  const first = { ...mockCatalog[0], id: 'nxsha-local-a', providerId: 'nxsha-native-a', tmdbId: 123 };
+  const sameNxshaItem = { ...first, id: 'nxsha-local-b', tmdbId: 456 };
+  const differentNxshaItem = { ...first, id: 'nxsha-local-c', providerId: 'nxsha-native-b' };
+  const result = deduplicateAndMergeCatalog([first, sameNxshaItem, differentNxshaItem]);
+  assert.equal(result.length, 2);
+  assert.equal(result[0].providerId, 'nxsha-native-a');
+  assert.equal(result[0].tmdbId, 123);
+  assert.equal(result[1].providerId, 'nxsha-native-b');
 });
 
 test('formatStorageQuota and estimateOfflineSizeMB compute deterministic storage metrics', () => {
