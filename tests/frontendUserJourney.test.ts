@@ -1,6 +1,7 @@
 import { describe, it } from 'node:test';
 import assert from 'node:assert';
 import { INITIAL_CATALOG, ROOM_THEMES } from '../src/data/catalog.ts';
+import { TEST_MEDIA_FIXTURES } from '../src/data/testMediaFixtures.ts';
 import {
   generateRoomCode,
   filterAndSearchCatalog,
@@ -33,20 +34,28 @@ describe('CineTogether — Complete Frontend & User Journey Verification', () =>
   });
 
   it('Journey 2: Honest streaming verification (No fake streams)', () => {
-    // Verified items have real authorized source or HLS URL
-    const verifiedItem = INITIAL_CATALOG.find((i) => i.sourceAvailability === 'verified');
-    assert.ok(verifiedItem, 'Verified title exists');
+    // Isolated test fixtures provide genuine stream sources
+    const verifiedFixture = TEST_MEDIA_FIXTURES.find((i) => i.sourceAvailability === 'verified');
+    assert.ok(verifiedFixture, 'Verified test fixture exists');
     assert.ok(
-      verifiedItem.authorizedPlaybackSource || verifiedItem.hlsUrl,
-      'Verified title provides genuine stream source'
+      verifiedFixture.authorizedPlaybackSource || verifiedFixture.hlsUrl,
+      'Verified test fixture provides genuine stream source'
     );
+    assert.ok(verifiedFixture.title.includes('[TEST FIXTURE]'), 'Fixture clearly labeled');
 
-    // Unreleased / metadata-only titles must NEVER claim active stream
+    // Unreleased / metadata-only titles in production must NEVER claim active stream
     const metadataOnly = INITIAL_CATALOG.find((i) => i.playbackStatus === 'metadata-only');
     if (metadataOnly) {
       assert.strictEqual(metadataOnly.sourceAvailability, 'unavailable');
       assert.strictEqual(metadataOnly.authorizedPlaybackSource, undefined);
       assert.strictEqual(metadataOnly.playbackCapability?.canSync, false);
+    }
+
+    // External provider titles in production provide official watch links
+    const externalWatch = INITIAL_CATALOG.find((i) => i.playbackStatus === 'external-watch');
+    if (externalWatch) {
+      assert.strictEqual(externalWatch.sourceAvailability, 'external-only');
+      assert.ok(externalWatch.nxshaWatchUrl, 'Has official provider watch URL');
     }
   });
 
@@ -78,9 +87,9 @@ describe('CineTogether — Complete Frontend & User Journey Verification', () =>
 
   it('Journey 4: Search & Filtering pipeline with multiple criteria', () => {
     // 1. Text search
-    const searchKyoto = filterAndSearchCatalog(INITIAL_CATALOG, 'Kyoto', 'all', 'All Platforms');
-    assert.ok(searchKyoto.length >= 1, 'Search for Kyoto returns matching title');
-    assert.ok(searchKyoto.some((i) => i.title.includes('Kyoto')));
+    const searchPenguin = filterAndSearchCatalog(INITIAL_CATALOG, 'Penguin', 'all', 'All Platforms');
+    assert.ok(searchPenguin.length >= 1, 'Search for Penguin returns matching title');
+    assert.ok(searchPenguin.some((i) => i.title.includes('Penguin')));
 
     // 2. Category filter
     const onlyAnime = filterAndSearchCatalog(INITIAL_CATALOG, '', 'anime', 'All Platforms');

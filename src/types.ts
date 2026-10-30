@@ -17,7 +17,10 @@ export type PlatformOrigin =
   | 'Prime Video'
   | 'Disney+'
   | 'Crunchyroll'
-  | 'Max';
+  | 'Max'
+  | 'Unverified'
+  | 'External Provider'
+  | 'Test Fixture';
 
 export type RoomMode = 'couple' | 'group';
 
@@ -44,7 +47,8 @@ export type PlaybackCapabilityStatus =
   | 'synced-ready'
   | 'embed-only'
   | 'external-watch'
-  | 'metadata-only';
+  | 'metadata-only'
+  | 'unverified';
 
 export interface TvEpisodeItem {
   id: string;
@@ -93,14 +97,14 @@ export interface MediaItem {
   metadataProvider?: string;
   authorizedPlaybackSource?: string;
   playbackType?: 'synced-studio' | 'embed-only' | 'external-watch' | 'metadata-only';
-  sourceAvailability?: 'verified' | 'unverified' | 'unavailable';
+  sourceAvailability?: 'verified' | 'unverified' | 'unavailable' | 'external-only';
   playbackCapability?: {
     canSync: boolean;
     canEmbed: boolean;
     requiresExternalWatch: boolean;
   };
-  nxshaWatchUrl: string;
-  nxshaEmbedUrl: string;
+  nxshaWatchUrl?: string;
+  nxshaEmbedUrl?: string;
   streamUrl: string;
   hlsUrl?: string;
   accentColor: string;
@@ -272,10 +276,14 @@ export interface SocialBroadcastPost {
 export interface PushNotificationItem {
   id: string;
   title: string;
-  body: string;
-  category: 'episode' | 'trending' | 'party' | 'security';
+  body?: string;
+  message?: string;
+  timestamp?: string;
+  type?: string;
+  roomCode?: string;
+  category?: 'episode' | 'trending' | 'party' | 'security';
   mediaId?: string;
-  createdAt: string;
+  createdAt?: string;
   read: boolean;
 }
 

@@ -37,6 +37,7 @@ import {
   INITIAL_SOCIAL_POSTS,
   INITIAL_WATCH_HISTORY,
 } from './data/catalog';
+import { TEST_MEDIA_FIXTURES } from './data/testMediaFixtures';
 import {
   BRAND_CONFIG,
   MediaItem,
@@ -157,6 +158,15 @@ export default function App() {
     'CineTogether Live Catalog (Powered by Nxsha.space)'
   );
   const [isDemoData, setIsDemoData] = useState<boolean>(false);
+  const [isProviderUnavailable, setIsProviderUnavailable] = useState<boolean>(false);
+  const [providerErrorCode, setProviderErrorCode] = useState<number | null>(null);
+
+  const handleLoadTestFixtures = () => {
+    setCatalog(TEST_MEDIA_FIXTURES);
+    setIsProviderUnavailable(false);
+    setCatalogError(null);
+    setNxshaSourceLabel('Isolated Test Media Fixtures (CC0 Sample Streams)');
+  };
 
   // Active Watch Room Code & Mode
   const [activeRoomCode, setActiveRoomCode] = useState<string>('LOVE-2026');
@@ -313,34 +323,61 @@ export default function App() {
     return () => window.removeEventListener('popstate', syncFromUrl);
   }, []);
 
-  // Load Nxsha live catalog & independent category feeds + health
+  // Load Codex authoritative catalog feed & independent category feeds + health
   const loadInitialFeeds = () => {
     setCatalogLoading(true);
     setTrendingLoading(true);
     setPopularMoviesLoading(true);
     setPopularTvLoading(true);
     setCatalogError(null);
+    setIsProviderUnavailable(false);
+    setProviderErrorCode(null);
 
     // 0. Check Catalog Health
     fetch('/api/health/catalog')
-      .then((r) => r.json())
+      .then((r) => {
+        if (r.status === 503) {
+          setIsProviderUnavailable(true);
+          setProviderErrorCode(503);
+        }
+        return r.json();
+      })
       .then((data) => {
         if (data.providers) {
+          const reachable = Boolean(data.providers.nxsha?.reachable);
           setProviderHealth({
-            nxshaReachable: Boolean(data.providers.nxsha?.reachable),
+            nxshaReachable: reachable,
             catalogSource: 'Nxsha.space Live Catalog',
           });
+          if (!reachable && data.status === 'unreachable') {
+            setIsProviderUnavailable(true);
+            setProviderErrorCode(503);
+          }
         }
       })
       .catch(() => {});
 
-    // 1. Nxsha Live Catalog Feed (Initial ingestion: up to 500 titles)
-    fetch('/api/nxsha/feed?pageSize=500')
-      .then((r) => r.json())
+    // 1. Authoritative Codex Catalog Feed (/api/catalog/feed)
+    fetch('/api/catalog/feed?section=all&page=1&pageSize=36')
+      .then(async (resp) => {
+        if (resp.status === 503) {
+          setIsProviderUnavailable(true);
+          setProviderErrorCode(503);
+          setCatalogError('Nxsha catalog provider is currently unavailable (HTTP 503 Service Unavailable).');
+          return null;
+        }
+        if (!resp.ok) {
+          setCatalogError(`Catalog service responded with HTTP ${resp.status}`);
+          return null;
+        }
+        return resp.json();
+      })
       .then((data) => {
+        if (!data) return;
         if (Array.isArray(data.items) && data.items.length > 0) {
+          setIsProviderUnavailable(false);
           setCatalog((prev) => deduplicateAndMergeCatalog(data.items, prev));
-          setNxshaSourceLabel(`Nxsha Live Catalog (${data.items.length} Titles)`);
+          setNxshaSourceLabel(`Nxsha Catalog (${data.totalCatalogSize || data.items.length} Verified Titles)`);
           setIsDemoData(Boolean(data.isDemoFallback));
           setCatalogBackendPage(1);
           setCatalogBackendHasMore(Boolean(data.hasMore));
@@ -356,10 +393,13 @@ export default function App() {
           if (trending.length > 0) setTrendingFeed(trending);
           if (movies.length > 0) setPopularMoviesFeed(movies.slice(0, 14));
           if (tvs.length > 0) setPopularTvFeed(tvs.slice(0, 14));
+        } else if (Array.isArray(data.items) && data.items.length === 0) {
+          setIsProviderUnavailable(true);
+          setCatalogError('Catalog provider returned 0 records.');
         }
       })
       .catch(() => {
-        setCatalogError('Could not load live Nxsha catalog. Check network or retry.');
+        setCatalogError('Could not load catalog feed. Check network or retry.');
       })
       .finally(() => {
         setCatalogLoading(false);
@@ -383,12 +423,12 @@ export default function App() {
       .catch(() => {});
   }, [userProfile.uid]);
 
-  // Handle Dynamic "Load More" from backend provider
+  // Handle Dynamic "Load More" from Codex backend provider
   const handleLoadMoreCatalog = async () => {
     if (catalogLoadingMore) return;
     setCatalogLoadingMore(true);
 
-    const tabKey =
+    const section =
       categoryFilter === 'movie'
         ? 'movie'
         : categoryFilter === 'tv'
@@ -400,7 +440,7 @@ export default function App() {
 
     try {
       const resp = await fetch(
-        `/api/nxsha/feed?tabKey=${tabKey}&page=${nextPage}&pageSize=24`
+        `/api/catalog/feed?section=${section}&page=${nextPage}&pageSize=24`
       );
       if (resp.ok) {
         const data = await resp.json();
@@ -420,7 +460,7 @@ export default function App() {
     }
   };
 
-  // Debounced server-backed Nxsha search against /api/nxsha/search?q=...
+  // Debounced server-backed search against Codex /api/catalog/search?q=...
   useEffect(() => {
     const trimmed = searchQuery.trim();
     setCatalogPage(1);
@@ -434,7 +474,7 @@ export default function App() {
     setLiveSearchLoading(true);
     const timer = setTimeout(() => {
       fetch(
-        `/api/nxsha/search?q=${encodeURIComponent(trimmed)}`
+        `/api/catalog/search?q=${encodeURIComponent(trimmed)}`
       )
         .then((r) => r.json())
         .then((data) => {
@@ -443,7 +483,7 @@ export default function App() {
             setCatalog((prev) => deduplicateAndMergeCatalog(data.items, prev));
             setServerSearchMetadata({
               totalResults: data.totalResults ?? data.items.length,
-              providers: ['Nxsha Stream'],
+              providers: data.providers || ['Nxsha Catalog'],
               query: trimmed,
             });
           }
@@ -1320,8 +1360,73 @@ export default function App() {
               </div>
             )}
 
+            {/* Dedicated Provider Unavailable Screen (When backend returns HTTP 503 or unreachable) */}
+            {isProviderUnavailable && (
+              <div className="p-6 sm:p-8 rounded-3xl bg-gradient-to-br from-slate-900/95 via-rose-950/25 to-slate-900/95 border border-rose-500/30 shadow-2xl backdrop-blur-xl space-y-5">
+                <div className="flex flex-col sm:flex-row items-start sm:items-center justify-between gap-4 pb-4 border-b border-rose-500/20">
+                  <div className="flex items-center gap-3.5">
+                    <div className="p-3 rounded-2xl bg-rose-500/10 border border-rose-500/30 text-rose-400">
+                      <AlertCircle className="w-6 h-6" />
+                    </div>
+                    <div>
+                      <h2 className="text-lg sm:text-xl font-display font-bold text-white tracking-tight">
+                        Catalog Provider Unavailable
+                      </h2>
+                      <p className="text-xs text-rose-300 font-mono">
+                        {providerErrorCode ? `HTTP ${providerErrorCode} Service Unavailable` : 'Upstream Catalog Unreachable'} · Nxsha Provider
+                      </p>
+                    </div>
+                  </div>
+                  <div className="flex items-center gap-2">
+                    <span className="px-3 py-1 rounded-full bg-rose-500/20 border border-rose-500/40 text-rose-300 text-xs font-mono font-medium">
+                      Live Ingestion Offline
+                    </span>
+                  </div>
+                </div>
+
+                <p className="text-sm text-slate-300 leading-relaxed max-w-3xl">
+                  The primary upstream media provider is currently unreachable or degraded. CineTogether only surfaces authentic catalog metadata and strictly avoids fabricating fake movie titles or mock streams.
+                </p>
+
+                {/* Status Pillars */}
+                <div className="grid grid-cols-1 sm:grid-cols-3 gap-3 text-xs">
+                  <div className="p-3.5 rounded-2xl bg-slate-950/60 border border-slate-800 space-y-1">
+                    <span className="text-slate-400 font-mono text-[11px] block">Ingestion Status</span>
+                    <span className="text-rose-400 font-medium font-mono">503 Service Unavailable</span>
+                  </div>
+                  <div className="p-3.5 rounded-2xl bg-slate-950/60 border border-slate-800 space-y-1">
+                    <span className="text-slate-400 font-mono text-[11px] block">Catalog Guard</span>
+                    <span className="text-emerald-400 font-medium font-mono">Zero Fabricated Records</span>
+                  </div>
+                  <div className="p-3.5 rounded-2xl bg-slate-950/60 border border-slate-800 space-y-1">
+                    <span className="text-slate-400 font-mono text-[11px] block">Playback Security</span>
+                    <span className="text-violet-400 font-medium font-mono">Drizzle/PostgreSQL DB</span>
+                  </div>
+                </div>
+
+                <div className="flex flex-wrap items-center gap-3 pt-2">
+                  <button
+                    type="button"
+                    onClick={() => loadInitialFeeds()}
+                    className="px-4 py-2.5 rounded-xl bg-rose-600 hover:bg-rose-500 text-white text-xs font-semibold inline-flex items-center gap-2 transition-colors shadow-lg"
+                  >
+                    <RefreshCw className="w-3.5 h-3.5" />
+                    <span>Retry Provider Connection</span>
+                  </button>
+                  <button
+                    type="button"
+                    onClick={handleLoadTestFixtures}
+                    className="px-4 py-2.5 rounded-xl bg-slate-800 hover:bg-slate-700 text-slate-200 text-xs font-semibold inline-flex items-center gap-2 transition-colors border border-slate-700"
+                  >
+                    <Play className="w-3.5 h-3.5 text-violet-400" />
+                    <span>Open Isolated Test Media Fixtures</span>
+                  </button>
+                </div>
+              </div>
+            )}
+
             {/* Error Banner with Retry */}
-            {catalogError && (
+            {catalogError && !isProviderUnavailable && (
               <div className="p-4 rounded-2xl bg-rose-950/30 border border-rose-500/40 flex items-center justify-between gap-4">
                 <div className="flex items-center gap-2.5 text-xs text-rose-200">
                   <AlertCircle className="w-4 h-4 text-rose-400 shrink-0" />

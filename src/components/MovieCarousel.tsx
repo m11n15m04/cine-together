@@ -4,7 +4,9 @@ import {
   Check,
   ChevronLeft,
   ChevronRight,
+  ExternalLink,
   Heart,
+  Info,
   Play,
   Plus,
   Sparkles,
@@ -60,7 +62,7 @@ export const MovieCard: React.FC<MovieCardProps> = ({
         />
 
         {/* Top Floating Badges */}
-        <div className="absolute top-2 left-2 flex items-center gap-1.5">
+        <div className="absolute top-2 left-2 flex items-center gap-1.5 flex-wrap max-w-[80%]">
           <span className="px-2 py-0.5 rounded-md bg-slate-950/85 backdrop-blur-md border border-white/10 text-[10px] font-mono uppercase text-violet-300 font-semibold shadow">
             {item.mediaType}
           </span>
@@ -69,7 +71,31 @@ export const MovieCard: React.FC<MovieCardProps> = ({
               title="Verified Synchronized Playback"
               className="px-1.5 py-0.5 rounded-md bg-emerald-950/85 backdrop-blur-md border border-emerald-500/40 text-[9px] font-mono text-emerald-300 font-bold"
             >
-              SYNC
+              ⚡ SYNC
+            </span>
+          )}
+          {item.playbackStatus === 'external-watch' && (
+            <span
+              title="External Provider Stream"
+              className="px-1.5 py-0.5 rounded-md bg-sky-950/85 backdrop-blur-md border border-sky-500/40 text-[9px] font-mono text-sky-300 font-bold"
+            >
+              ↗ EXT
+            </span>
+          )}
+          {item.playbackStatus === 'metadata-only' && (
+            <span
+              title="Verified Theatrical / Release Metadata (No Stream)"
+              className="px-1.5 py-0.5 rounded-md bg-slate-900/90 backdrop-blur-md border border-slate-700/60 text-[9px] font-mono text-slate-400 font-medium"
+            >
+              📋 INFO
+            </span>
+          )}
+          {item.playbackStatus === 'unverified' && (
+            <span
+              title="Unverified Playback Stream"
+              className="px-1.5 py-0.5 rounded-md bg-amber-950/85 backdrop-blur-md border border-amber-500/40 text-[9px] font-mono text-amber-300 font-medium"
+            >
+              ⚠️ UNVERIFIED
             </span>
           )}
         </div>
@@ -114,15 +140,37 @@ export const MovieCard: React.FC<MovieCardProps> = ({
         {/* Action Controls */}
         <div className="pt-2 space-y-1.5">
           <div className="flex items-center gap-1.5">
-            <button
-              type="button"
-              onClick={() => onStartWatching(item)}
-              className="flex-1 py-1.5 px-2.5 rounded-xl bg-violet-600 hover:bg-violet-500 text-white text-xs font-semibold inline-flex items-center justify-center gap-1.5 transition-colors shadow-md"
-              title="Watch now"
-            >
-              <Play className="w-3.5 h-3.5 fill-current" />
-              <span>Watch</span>
-            </button>
+            {item.playbackStatus === 'metadata-only' ? (
+              <button
+                type="button"
+                onClick={() => onOpenDetails(item)}
+                className="flex-1 py-1.5 px-2.5 rounded-xl bg-slate-800 hover:bg-slate-700 text-slate-200 text-xs font-medium inline-flex items-center justify-center gap-1.5 transition-colors border border-slate-700"
+                title="View details and release information"
+              >
+                <Info className="w-3.5 h-3.5 text-slate-400" />
+                <span>Details</span>
+              </button>
+            ) : item.playbackStatus === 'external-watch' ? (
+              <button
+                type="button"
+                onClick={() => onStartWatching(item)}
+                className="flex-1 py-1.5 px-2.5 rounded-xl bg-sky-700 hover:bg-sky-600 text-white text-xs font-semibold inline-flex items-center justify-center gap-1.5 transition-colors shadow-md"
+                title="Watch on External Provider"
+              >
+                <ExternalLink className="w-3.5 h-3.5" />
+                <span>External</span>
+              </button>
+            ) : (
+              <button
+                type="button"
+                onClick={() => onStartWatching(item)}
+                className="flex-1 py-1.5 px-2.5 rounded-xl bg-violet-600 hover:bg-violet-500 text-white text-xs font-semibold inline-flex items-center justify-center gap-1.5 transition-colors shadow-md"
+                title="Watch now"
+              >
+                <Play className="w-3.5 h-3.5 fill-current" />
+                <span>Watch</span>
+              </button>
+            )}
 
             <button
               type="button"
