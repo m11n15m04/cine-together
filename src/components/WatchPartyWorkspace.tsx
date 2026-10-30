@@ -36,6 +36,7 @@ import {
   shouldAcceptSyncRevision,
 } from '../utils/streamEngine';
 import { AdaptiveVideoPlayer } from './AdaptiveVideoPlayer';
+import { apiFetch, getActorToken, getRoomAccessToken, saveRoomAccessToken } from '../lib/api';
 
 interface WatchPartyWorkspaceProps {
   catalog: MediaItem[];
@@ -74,14 +75,10 @@ export const WatchPartyWorkspace: React.FC<WatchPartyWorkspaceProps> = ({
   onLeaveRoom,
 }) => {
   const [partyMode, setPartyMode] = useState<'group' | 'couple'>(initialMode);
-  const [roomId, setRoomId] = useState<string>(
-    initialRoomCode || (initialMode === 'couple' ? 'LOVE-2026' : 'CLUB-4096')
-  );
+  const [roomId, setRoomId] = useState<string>(initialRoomCode || '');
   const [memberName, setMemberName] = useState<string>(userDisplayName);
   const [chatInput, setChatInput] = useState<string>('');
-  const [coupleNoteInput, setCoupleNoteInput] = useState<string>(
-    'Friday Date Night · Kyoto Temple Rain Scene at 08:05 ❤️'
-  );
+  const [coupleNoteInput, setCoupleNoteInput] = useState<string>('');
   const [copiedInvite, setCopiedInvite] = useState<boolean>(false);
   const [wsConnected, setWsConnected] = useState<boolean>(false);
   const [sidebarTab, setSidebarTab] = useState<'chat' | 'votes' | 'roster'>('chat');
@@ -99,67 +96,33 @@ export const WatchPartyWorkspace: React.FC<WatchPartyWorkspaceProps> = ({
   const localStreamRef = useRef<MediaStream | null>(null);
 
   const [roomState, setRoomState] = useState<PartyPlaybackState>({
-    roomId: initialRoomCode || (initialMode === 'couple' ? 'LOVE-2026' : 'CLUB-4096'),
-    roomCode: initialRoomCode || (initialMode === 'couple' ? 'LOVE-2026' : 'CLUB-4096'),
-    roomName:
-      initialMode === 'couple'
-        ? 'Kyoto Rain & Rose Nebula Date Night'
-        : 'Friday Sci-Fi & Spider-Verse Premiere Lounge',
+    roomId: initialRoomCode || '',
+    roomCode: initialRoomCode || '',
+    roomName: 'Connecting to watch room…',
     mode: initialMode,
     mediaId: selectedMedia.id,
     mediaType: selectedMedia.mediaType,
     season: 1,
     episode: 1,
     isPlaying: false,
-    currentTimeSeconds: 142,
+    currentTimeSeconds: 0,
     playbackRate: 1,
     revision: 1,
     updatedAtMs: Date.now(),
-    hostId: 'self',
+    hostId: '',
     collaborativeControls: initialMode === 'couple',
     isLocked: false,
     roomTheme: initialMode === 'couple' ? 'rose-nebula' : 'midnight-violet',
-    lifecycleState: 'ready',
-    members: [
-      {
-        id: 'self',
-        name: userDisplayName,
-        avatarColor: initialMode === 'couple' ? '#f43f5e' : '#8b5cf6',
-        role: 'host',
-        isOnline: true,
-        joinedAt: 'Now',
-        mood: 'In Sync ❤️',
-        micMuted: true,
-        camEnabled: false,
-      },
-      {
-        id: 'partner-elena',
-        name: initialMode === 'couple' ? 'Elena (Partner)' : 'Marcus Chen',
-        avatarColor: '#ec4899',
-        role: initialMode === 'couple' ? 'partner' : 'moderator',
-        isOnline: true,
-        joinedAt: '2m ago',
-        mood: 'Locked',
-        micMuted: true,
-        camEnabled: false,
-      },
-    ],
+    lifecycleState: 'waiting',
+    members: [],
     messages: [],
-    votes: [
-      {
-        id: 'v-init-1',
-        mediaId: 'nx-278',
-        mediaTitle: 'Midnight over Montmartre',
-        voterId: 'partner-elena',
-        voterName: 'Elena',
-      },
-    ],
-    couplePulseCount: 14,
-    couplePartnerNote: 'Friday Date Night · Kyoto Temple Rain Scene at 08:05 ❤️',
+    votes: [],
+    couplePulseCount: 0,
+    couplePartnerNote: '',
   });
 
   const wsRef = useRef<WebSocket | null>(null);
-  const memberIdRef = useRef<string>(`usr-${Math.random().toString(36).slice(2, 8)}`);
+  const memberIdRef = useRef<string>('');
   const lastRevisionRef = useRef<number>(0);
 
   useEffect(() => {
@@ -167,79 +130,103 @@ export const WatchPartyWorkspace: React.FC<WatchPartyWorkspaceProps> = ({
     if (initialRoomCode) {
       setRoomId(initialRoomCode.toUpperCase());
     } else {
-      setRoomId(initialMode === 'couple' ? 'LOVE-2026' : 'CLUB-4096');
+      setRoomId('');
     }
   }, [initialMode, initialRoomCode]);
 
   useEffect(() => {
-    const protocol = window.location.protocol === 'https:' ? 'wss:' : 'ws:';
-    const wsUrl = `${protocol}//${window.location.host}/ws/party`;
-    const ws = new WebSocket(wsUrl);
-    wsRef.current = ws;
+    let cancelled = false;
+    let retryTimer = 0;
+    let retryDelay = 1000;
+    let socket: WebSocket | null = null;
 
-    ws.onopen = () => {
-      setWsConnected(true);
-      setRoomError(null);
-      ws.send(
-        JSON.stringify({
-          type: 'room:join',
-          roomId,
-          memberId: memberIdRef.current,
-          memberName,
-          mode: partyMode,
-          mediaId: selectedMedia.id,
-          mediaType: selectedMedia.mediaType,
-        })
-      );
-    };
+    if (!roomId) {
+      setWsConnected(false);
+      setRoomError('Create a room or open a valid room invitation first.');
+      return;
+    }
 
-    ws.onmessage = (event) => {
+    const connect = async () => {
       try {
-        const data = JSON.parse(event.data);
-        if (data.type === 'room:error') {
-          setRoomError(String(data.error || 'Room action restricted'));
-          setTimeout(() => setRoomError(null), 4000);
-          return;
+        const actorToken = await getActorToken({ allowGuest: true, displayName: memberName });
+        if (!actorToken || cancelled) return;
+        let accessToken = getRoomAccessToken(roomId);
+        if (!accessToken) {
+          const verify = await apiFetch(`/api/party/rooms/${encodeURIComponent(roomId)}/verify`, {
+            method: 'POST', body: JSON.stringify({ password: '' }),
+          }, { allowGuest: true, displayName: memberName });
+          const result = await verify.json();
+          if (!verify.ok || typeof result.roomAccessToken !== 'string') throw new Error(result.error || 'Open this room through its invite code and password.');
+          accessToken = result.roomAccessToken as string;
+          saveRoomAccessToken(roomId, accessToken);
         }
-        if (data.type === 'room:reaction' && data.reaction) {
-          const incomingReaction: FloatingReaction = data.reaction;
-          setFloatingReactions((prev) => [...prev.slice(-12), incomingReaction]);
-          setTimeout(() => {
-            setFloatingReactions((prev) => prev.filter((r) => r.id !== incomingReaction.id));
-          }, 3200);
-          if (data.room) {
-            setRoomState(data.room);
-          }
-          return;
-        }
-        if (data.type === 'room:state' && data.room) {
-          const incoming: PartyPlaybackState = data.room;
-          if (!shouldAcceptSyncRevision(lastRevisionRef.current, incoming.revision || 1)) {
-            return;
-          }
-          lastRevisionRef.current = incoming.revision || 1;
-          setRoomState(incoming);
-          if (incoming.couplePartnerNote) {
-            setCoupleNoteInput(incoming.couplePartnerNote);
-          }
-          const matchedMedia = catalog.find((c) => c.id === incoming.mediaId);
-          if (matchedMedia && matchedMedia.id !== selectedMedia.id) {
-            onSelectMedia(matchedMedia);
-          }
-        }
-      } catch {
-        // ignore parse errors
+        if (!accessToken) throw new Error('A room invitation is required.');
+        if (cancelled) return;
+
+        const protocol = window.location.protocol === 'https:' ? 'wss:' : 'ws:';
+        socket = new WebSocket(`${protocol}//${window.location.host}/ws/party`);
+        wsRef.current = socket;
+        socket.onopen = () => {
+          setWsConnected(false);
+          socket?.send(JSON.stringify({ type: 'auth', token: actorToken }));
+        };
+        socket.onmessage = (event) => {
+          try {
+            const data = JSON.parse(event.data);
+            if (data.type === 'auth:ok') {
+              memberIdRef.current = String(data.actor?.id || '');
+              socket?.send(JSON.stringify({ type: 'room:join', roomId, memberName, roomAccessToken: accessToken }));
+              setRoomError(null);
+              return;
+            }
+            if (data.type === 'room:error') {
+              setRoomError(String(data.error || 'Room action restricted'));
+              return;
+            }
+            if (data.type === 'room:kicked') {
+              setRoomError('The room host removed you from this room.');
+              socket?.close(4003, 'Removed by host');
+              return;
+            }
+            if (data.type === 'room:reaction' && data.reaction) {
+              const incomingReaction: FloatingReaction = data.reaction;
+              setFloatingReactions((prev) => [...prev.slice(-12), incomingReaction]);
+              setTimeout(() => setFloatingReactions((prev) => prev.filter((r) => r.id !== incomingReaction.id)), 3200);
+              if (data.room) setRoomState(data.room);
+              return;
+            }
+            if (data.type === 'room:state' && data.room) {
+              const incoming: PartyPlaybackState = data.room;
+              if (!shouldAcceptSyncRevision(lastRevisionRef.current, incoming.revision || 1)) return;
+              lastRevisionRef.current = incoming.revision || 1;
+              setRoomState(incoming);
+              setWsConnected(true);
+              if (incoming.couplePartnerNote) setCoupleNoteInput(incoming.couplePartnerNote);
+              const matchedMedia = catalog.find((c) => c.id === incoming.mediaId);
+              if (matchedMedia && matchedMedia.id !== selectedMedia.id) onSelectMedia(matchedMedia);
+            }
+          } catch { /* Ignore malformed server events. */ }
+        };
+        socket.onclose = (event) => {
+          setWsConnected(false);
+          if (cancelled || event.code === 1008 || event.code === 4003) return;
+          retryTimer = window.setTimeout(() => { retryDelay = Math.min(15_000, retryDelay * 2); void connect(); }, retryDelay);
+        };
+        socket.onerror = () => setWsConnected(false);
+      } catch (error) {
+        setWsConnected(false);
+        setRoomError(error instanceof Error ? error.message : 'Could not connect to the watch room.');
       }
     };
 
-    ws.onclose = () => {
-      setWsConnected(false);
-    };
-
+    void connect();
     return () => {
-      ws.close();
+      cancelled = true;
+      window.clearTimeout(retryTimer);
+      socket?.close(1000, 'Room view closed');
+      if (wsRef.current === socket) wsRef.current = null;
     };
-  }, [roomId, partyMode]);
+  }, [roomId, partyMode, memberName]);
 
   // Clean up local WebRTC media tracks on unmount
   useEffect(() => {
@@ -275,10 +262,7 @@ export const WatchPartyWorkspace: React.FC<WatchPartyWorkspaceProps> = ({
   }, [roomCatalogSearch]);
 
   const handleSwitchMode = (nextMode: 'group' | 'couple') => {
-    setPartyMode(nextMode);
-    const targetRoom = nextMode === 'couple' ? 'LOVE-2026' : 'CLUB-4096';
-    setRoomId(targetRoom);
-    lastRevisionRef.current = 0;
+    if (nextMode !== partyMode) setRoomError('Room type is set when the host creates the room.');
   };
 
   const handlePlaybackChange = (isPlaying: boolean, currentTimeSeconds: number) => {

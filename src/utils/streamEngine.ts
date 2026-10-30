@@ -296,7 +296,7 @@ export function filterAndSearchCatalog(
 }
 
 /**
- * Deduplicates and merges catalog items by provider/TMDB ID while preserving the richest metadata.
+ * Deduplicates by Nxsha's native provider ID when present, otherwise by the local item ID.
  */
 export function deduplicateAndMergeCatalog(
   primaryItems: MediaItem[],
@@ -305,8 +305,8 @@ export function deduplicateAndMergeCatalog(
   const map = new Map<string, MediaItem>();
   for (const item of [...primaryItems, ...secondaryItems]) {
     if (!item || !item.title) continue;
-    // Separate keys by mediaType and ID so movie and tv titles with identical IDs never collide
-    const key = `${item.mediaType}:${item.tmdbId || item.id}`;
+    // TMDb/IMDb identifiers are only for Nxsha's documented player routes, never catalog identity.
+    const key = `${item.mediaType}:${item.providerId ? `nxsha:${item.providerId}` : `local:${item.id}`}`;
     const existing = map.get(key);
     if (!existing) {
       map.set(key, item);
@@ -322,9 +322,6 @@ export function deduplicateAndMergeCatalog(
         isTrending: existing.isTrending || item.isTrending,
         isPopularThisWeek: existing.isPopularThisWeek || item.isPopularThisWeek,
         isRecentlyAdded: existing.isRecentlyAdded || item.isRecentlyAdded,
-        nxshaEmbedUrl: existing.nxshaEmbedUrl || item.nxshaEmbedUrl,
-        nxshaWatchUrl: existing.nxshaWatchUrl || item.nxshaWatchUrl,
-        streamUrl: existing.streamUrl || item.streamUrl,
         playbackStatus:
           existing.playbackStatus === 'synced-ready' || item.playbackStatus === 'synced-ready'
             ? 'synced-ready'
@@ -421,26 +418,6 @@ export function generatePrivacyFingerprint(userId: string, pin: string): string 
   const hex1 = (h1 >>> 0).toString(16).padStart(8, '0');
   const hex2 = (h2 >>> 0).toString(16).padStart(8, '0');
   return `NX-${hex1.toUpperCase().slice(0, 4)}-${hex2.toUpperCase().slice(0, 4)}-E2EE`;
-}
-
-/**
- * Builds the canonical Nxsha embed URL for movies (/embed/movie/{id})
- * and episodic TV/Anime (/embed/tv/{id}/{season}/{episode}).
- */
-export function buildNxshaEmbedUrl(
-  baseUrl: string,
-  mediaType: 'movie' | 'tv' | 'anime',
-  tmdbId: number,
-  season = 1,
-  episode = 1
-): string {
-  const cleanBase = (baseUrl || 'https://nxsha.space').replace(/\/+$/, '');
-  if (mediaType === 'movie') {
-    return `${cleanBase}/embed/movie/${tmdbId}`;
-  }
-  const safeSeason = Math.max(1, Math.floor(season || 1));
-  const safeEpisode = Math.max(1, Math.floor(episode || 1));
-  return `${cleanBase}/embed/tv/${tmdbId}/${safeSeason}/${safeEpisode}`;
 }
 
 /**

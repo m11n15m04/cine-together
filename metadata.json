@@ -1,10 +1,6 @@
-<<<<<<< HEAD
 {
-  "name": "Nxsha Stream — Unified Cinema & Watch Party Platform",
-  "description": "Cross-platform adaptive bitrate streaming platform powered by nxsha.space sources, featuring real-time Group & Couple Watch Parties, offline playback vault, social broadcasting, and Gemini AI companions.",
+  "name": "CineTogether — Unified Cinema & Watch Party Platform",
+  "description": "Discover movie and TV metadata, keep a personal watchlist, track viewing progress, and coordinate watch parties with authorized playback sources.",
   "requestFramePermissions": ["camera", "microphone"],
   "majorCapabilities": ["MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"]
 }
-=======
-{"name":"mach— Unified Cinema \u0026 Watch Party Platform","description":"Cross-platform adaptive bitrate streaming platform powered by nxsha.space sources, featuring real-time Group \u0026 Couple Watch Parties, offline playback vault, social broadcasting, and Gemini AI companions.","requestFramePermissions":["camera","microphone"],"majorCapabilities":["MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"]}
->>>>>>> c3dee35 (fix(deps): resolve npm ERESOLVE peer dependency conflict for esbuild and vite 8)

@@ -1,7 +1,6 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import {
-  buildNxshaEmbedUrl,
   calculateAdaptiveBitrate,
   classifyPlaybackDrift,
   computePersonalizedRecommendations,
@@ -24,7 +23,7 @@ const mockCatalog: MediaItem[] = [
     tmdbId: 1400940,
     title: 'Clayface',
     mediaType: 'movie',
-    platform: 'Nxsha Originals',
+    platform: 'Unverified',
     releaseDate: 'Oct 19, 2026',
     year: '2026',
     rating: 7.5,
@@ -32,9 +31,6 @@ const mockCatalog: MediaItem[] = [
     genres: ['Sci-Fi', 'Thriller', 'Horror'],
     language: 'English',
     description: 'Matt Hagen seeks a cutting edge treatment in Gotham.',
-    nxshaWatchUrl: 'https://nxsha.space/watch/movie/1400940',
-    nxshaEmbedUrl: 'https://nxsha.space/embed/movie/1400940',
-    streamUrl: 'https://commondatastorage.googleapis.com/gtv-videos-bucket/sample/TearsOfSteel.mp4',
     accentColor: '#d97706',
     secondaryColor: '#0f172a',
     director: 'Mike Flanagan',
@@ -46,7 +42,7 @@ const mockCatalog: MediaItem[] = [
     tmdbId: 791523,
     title: 'Wildwood',
     mediaType: 'anime',
-    platform: 'Crunchyroll',
+    platform: 'Unverified',
     releaseDate: 'Oct 19, 2026',
     year: '2026',
     rating: 8.6,
@@ -54,9 +50,6 @@ const mockCatalog: MediaItem[] = [
     genres: ['Animation', 'Fantasy', 'Adventure'],
     language: 'English',
     description: 'Prue and Curtis are drawn into an enchanted forest.',
-    nxshaWatchUrl: 'https://nxsha.space/watch/movie/791523',
-    nxshaEmbedUrl: 'https://nxsha.space/embed/movie/791523',
-    streamUrl: 'https://commondatastorage.googleapis.com/gtv-videos-bucket/sample/Sintel.mp4',
     accentColor: '#059669',
     secondaryColor: '#064e3b',
     director: 'Travis Knight',
@@ -68,7 +61,7 @@ const mockCatalog: MediaItem[] = [
     tmdbId: 969681,
     title: 'Spider-Man: Brand New Day',
     mediaType: 'movie',
-    platform: 'Disney+',
+    platform: 'Unverified',
     releaseDate: 'Jul 29, 2026',
     year: '2026',
     rating: 8.5,
@@ -76,9 +69,6 @@ const mockCatalog: MediaItem[] = [
     genres: ['Sci-Fi', 'Action', 'Adventure'],
     language: 'English',
     description: 'Peter Parker faces a shocking new threat in New York.',
-    nxshaWatchUrl: 'https://nxsha.space/watch/movie/969681',
-    nxshaEmbedUrl: 'https://nxsha.space/embed/movie/969681',
-    streamUrl: 'https://commondatastorage.googleapis.com/gtv-videos-bucket/sample/BigBuckBunny.mp4',
     accentColor: '#e11d48',
     secondaryColor: '#1e1b4b',
     director: 'Destin Daniel Cretton',
@@ -158,18 +148,11 @@ test('shouldAcceptSyncRevision and classifyPlaybackDrift handle revision orderin
   assert.equal(classifyPlaybackDrift(3.5), 'hard-seek');
 });
 
-test('buildNxshaEmbedUrl and MediaProviderAdapter construct valid URLs and honest sync flags', () => {
-  const movieUrl = buildNxshaEmbedUrl('https://nxsha.space/', 'movie', 969681);
-  assert.equal(movieUrl, 'https://nxsha.space/embed/movie/969681');
-
-  const tvUrl = buildNxshaEmbedUrl('https://nxsha.space', 'tv', 204988, 2, 5);
-  assert.equal(tvUrl, 'https://nxsha.space/embed/tv/204988/2/5');
-
+test('MediaProviderAdapter exposes only configured sources and honest sync flags', () => {
   const syncedAdapter = createMediaProviderAdapter({
     providerType: 'synced-studio',
-    streamUrl: '/api/media/stream/nx-969681',
+    streamUrl: 'https://media.example.test/authorized.mp4',
     mediaType: 'movie',
-    tmdbId: 969681,
     durationMinutes: 142,
   });
   assert.equal(syncedAdapter.supportsProgrammaticSync, true);
@@ -180,18 +163,17 @@ test('buildNxshaEmbedUrl and MediaProviderAdapter construct valid URLs and hones
   assert.equal(syncedAdapter.getCurrentTime(), 42);
 
   const externalAdapter = createMediaProviderAdapter({
-    providerType: 'nxsha-embed',
-    streamUrl: '/api/media/stream/nx-204988',
+    providerType: 'authorized-external',
+    openOnProviderUrl: 'https://provider.example.test/watch/authorized-title',
     mediaType: 'tv',
-    tmdbId: 204988,
     season: 1,
     episode: 4,
     durationMinutes: 52,
   });
   assert.equal(externalAdapter.supportsProgrammaticSync, false);
-  assert.ok(externalAdapter.syncLimitationNotice?.includes('Sync unavailable'));
-  assert.equal(externalAdapter.getEmbedUrl(), 'https://nxsha.space/embed/tv/204988/1/4');
-  assert.equal(externalAdapter.getOpenOnProviderUrl(), 'https://nxsha.space/watch/tv/204988/1/4');
+  assert.ok(externalAdapter.syncLimitationNotice?.includes('does not expose a synchronization API'));
+  assert.equal(externalAdapter.getEmbedUrl(), '');
+  assert.equal(externalAdapter.getOpenOnProviderUrl(), 'https://provider.example.test/watch/authorized-title');
   assert.equal(externalAdapter.getCapabilities().requiresManualCoordination, true);
 });
 
@@ -242,6 +224,17 @@ test('deduplicateAndMergeCatalog and paginateCatalog prevent duplicates and pagi
   const page2 = paginateCatalog(merged, 2, 2);
   assert.equal(page2.visibleItems.length, 3);
   assert.equal(page2.hasMore, false);
+});
+
+test('catalog identity is preserved by Nxsha provider ID rather than TMDb player ID', () => {
+  const first = { ...mockCatalog[0], id: 'nxsha-local-a', providerId: 'nxsha-native-a', tmdbId: 123 };
+  const sameNxshaItem = { ...first, id: 'nxsha-local-b', tmdbId: 456 };
+  const differentNxshaItem = { ...first, id: 'nxsha-local-c', providerId: 'nxsha-native-b' };
+  const result = deduplicateAndMergeCatalog([first, sameNxshaItem, differentNxshaItem]);
+  assert.equal(result.length, 2);
+  assert.equal(result[0].providerId, 'nxsha-native-a');
+  assert.equal(result[0].tmdbId, 123);
+  assert.equal(result[1].providerId, 'nxsha-native-b');
 });
 
 test('formatStorageQuota and estimateOfflineSizeMB compute deterministic storage metrics', () => {
