@@ -1,5 +1,5 @@
 import crypto from 'node:crypto';
-import { and, desc, eq, ne, sql } from 'drizzle-orm';
+import { and, desc, eq, isNull, ne, sql } from 'drizzle-orm';
 import { db } from './index.ts';
 import {
   chatMessages,
@@ -72,18 +72,22 @@ export async function seedDemoCatalog(): Promise<void> {
 }
 
 export async function listActiveWatchRooms(): Promise<WatchRoomSummary[]> {
+  const onlineMemberCounts = db
+    .select({
+      roomId: roomMembers.roomId,
+      memberCount: sql<number>`count(*)::int`.as('member_count'),
+    })
+    .from(roomMembers)
+    .where(and(eq(roomMembers.isOnline, true), isNull(roomMembers.leftAt)))
+    .groupBy(roomMembers.roomId)
+    .as('online_member_counts');
   const rows = await db
     .select({
       room: watchRooms,
-      memberCount: sql<number>`(
-        SELECT count(*)::int
-        FROM ${roomMembers}
-        WHERE ${roomMembers.roomId} = ${watchRooms.id}
-          AND ${roomMembers.isOnline} = true
-          AND ${roomMembers.leftAt} IS NULL
-      )`,
+      memberCount: sql<number>`coalesce(${onlineMemberCounts.memberCount}, 0)::int`,
     })
     .from(watchRooms)
+    .leftJoin(onlineMemberCounts, eq(onlineMemberCounts.roomId, watchRooms.id))
     .where(and(eq(watchRooms.isPrivate, false), ne(watchRooms.status, 'ended')))
     .orderBy(desc(watchRooms.createdAt))
     .limit(50);
