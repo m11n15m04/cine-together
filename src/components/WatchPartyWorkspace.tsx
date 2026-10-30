@@ -14,6 +14,7 @@ import {
   Send,
   Shield,
   ThumbsUp,
+  Timer,
   Unlock,
   UserMinus,
   Users,
@@ -929,6 +930,19 @@ export const WatchPartyWorkspace: React.FC<WatchPartyWorkspaceProps> = ({
             floatingReactions={floatingReactions}
             onEpisodeChange={handleEpisodeChange}
             onPlaybackChange={handlePlaybackChange}
+            onTriggerCountdown={() => {
+              if (wsRef.current?.readyState === WebSocket.OPEN) {
+                wsRef.current.send(
+                  JSON.stringify({
+                    type: 'chat:send',
+                    senderName: 'CineTogether System',
+                    text: `🎬 ${memberName} started a 3-2-1 Synchronized Countdown!`,
+                    videoTimestampSeconds: roomState.currentTimeSeconds,
+                    messageType: 'system',
+                  })
+                );
+              }
+            }}
             onTriggerDownload={onTriggerDownload}
             onTriggerShare={onTriggerShare}
           />
@@ -948,6 +962,35 @@ export const WatchPartyWorkspace: React.FC<WatchPartyWorkspaceProps> = ({
                   {emoji}
                 </button>
               ))}
+
+              <button
+                type="button"
+                onClick={() => {
+                  if (wsRef.current?.readyState === WebSocket.OPEN) {
+                    wsRef.current.send(
+                      JSON.stringify({
+                        type: 'chat:send',
+                        senderName: 'CineTogether System',
+                        text: `🎬 ${memberName} started a 3-2-1 Synchronized Countdown!`,
+                        videoTimestampSeconds: roomState.currentTimeSeconds,
+                        messageType: 'system',
+                      })
+                    );
+                  }
+                  const playerCountdownTrigger = document.querySelector(
+                    '[aria-label="Start synchronized 3-2-1 countdown"]'
+                  ) as HTMLButtonElement | null;
+                  if (playerCountdownTrigger) {
+                    playerCountdownTrigger.click();
+                  }
+                }}
+                aria-label="Trigger synchronized 3-2-1 countdown"
+                className="px-2.5 py-1.5 rounded-xl bg-violet-600/20 hover:bg-violet-600/30 border border-violet-500/40 text-violet-200 text-xs font-semibold inline-flex items-center gap-1.5 transition-colors"
+                title="Start 3-2-1 synchronized play"
+              >
+                <Timer className="w-3.5 h-3.5 text-violet-400" />
+                <span>3-2-1 Start</span>
+              </button>
             </div>
 
             <div className="flex items-center gap-2 flex-wrap">

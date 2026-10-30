@@ -3,7 +3,10 @@ import {
   AlertCircle,
   Bell,
   Bookmark,
+  BrainCircuit,
   Check,
+  ChevronLeft,
+  ChevronRight,
   Compass,
   Database,
   Download,
@@ -26,6 +29,7 @@ import {
   Tv,
   User,
   Users,
+  X,
 } from 'lucide-react';
 import {
   INITIAL_CATALOG,
@@ -33,6 +37,7 @@ import {
   INITIAL_SOCIAL_POSTS,
   INITIAL_WATCH_HISTORY,
 } from './data/catalog';
+import { TEST_MEDIA_FIXTURES } from './data/testMediaFixtures';
 import {
   BRAND_CONFIG,
   MediaItem,
@@ -53,6 +58,7 @@ import {
   paginateCatalog,
 } from './utils/streamEngine';
 import { MediaPoster } from './components/MediaPoster';
+import { apiFetch, saveRoomAccessToken } from './lib/api';
 import { AdaptiveVideoPlayer } from './components/AdaptiveVideoPlayer';
 import { WatchPartyWorkspace } from './components/WatchPartyWorkspace';
 import { AiVoiceAndConcierge } from './components/AiVoiceAndConcierge';
@@ -62,6 +68,7 @@ import {
   MediaDetailView,
   ProfileAndAuthView,
 } from './components/CineTogetherViews';
+import { HorizontalPosterCarousel } from './components/MovieCarousel';
 
 type ActiveTab =
   | 'home'
@@ -119,8 +126,8 @@ const YEAR_FILTERS = ['All Years', '2026', '2025', '2024', '2023', '2022', '2021
 
 export default function App() {
   const [activeTab, setActiveTab] = useState<ActiveTab>('home');
-  const [catalog, setCatalog] = useState<MediaItem[]>(INITIAL_CATALOG);
-  const [catalogLoading, setCatalogLoading] = useState<boolean>(false);
+  const [catalog, setCatalog] = useState<MediaItem[]>([]);
+  const [catalogLoading, setCatalogLoading] = useState<boolean>(true);
   const [catalogError, setCatalogError] = useState<string | null>(null);
   const [catalogBackendPage, setCatalogBackendPage] = useState<number>(1);
   const [catalogBackendHasMore, setCatalogBackendHasMore] = useState<boolean>(true);
@@ -136,9 +143,8 @@ export default function App() {
 
   // Server health state
   const [providerHealth, setProviderHealth] = useState<{
-    tmdbReachable: boolean;
     nxshaReachable: boolean;
-    authType?: string;
+    catalogSource?: string;
   } | null>(null);
 
   // Server search feedback
@@ -148,10 +154,38 @@ export default function App() {
     query: string;
   } | null>(null);
 
-  const [nxshaSourceLabel, setNxshaSourceLabel] = useState<string>(
-    'CineTogether Unified Live Catalog (TMDB + Nxsha + Studio)'
-  );
+  const [nxshaSourceLabel, setNxshaSourceLabel] = useState<string>('Nxsha Catalog');
   const [isDemoData, setIsDemoData] = useState<boolean>(false);
+  const [isProviderUnavailable, setIsProviderUnavailable] = useState<boolean>(false);
+  const [providerErrorCode, setProviderErrorCode] = useState<number | null>(null);
+
+  const handleLoadTestFixtures = () => {
+    setCatalog(TEST_MEDIA_FIXTURES);
+    setSelectedMedia(TEST_MEDIA_FIXTURES[0]);
+    setIsProviderUnavailable(false);
+    setIsDemoData(true);
+    setCatalogError(null);
+    setNxshaSourceLabel('Offline Sample Content (Test Media Fixtures)');
+    setProviderHealth({
+      nxshaReachable: false,
+      catalogSource: 'Offline Sample Content (Isolated Test Fixtures)',
+    });
+    triggerBanner('Loaded verified offline test media fixtures for playback testing.');
+  };
+
+  const handleLoadOfflineCuratedSample = () => {
+    setCatalog(INITIAL_CATALOG);
+    setSelectedMedia(INITIAL_CATALOG[0]);
+    setIsProviderUnavailable(false);
+    setIsDemoData(true);
+    setCatalogError(null);
+    setNxshaSourceLabel('Offline Sample Content (Curated Demo)');
+    setProviderHealth({
+      nxshaReachable: false,
+      catalogSource: 'Offline Sample Content (Curated Preview)',
+    });
+    triggerBanner('Loaded curated offline sample catalog.');
+  };
 
   // Active Watch Room Code & Mode
   const [activeRoomCode, setActiveRoomCode] = useState<string>('LOVE-2026');
@@ -190,12 +224,12 @@ export default function App() {
   const PAGE_SIZE = 24;
 
   // Active Media & Inline Theater Modal State
-  const [selectedMedia, setSelectedMedia] = useState<MediaItem>(INITIAL_CATALOG[0]);
+  const [selectedMedia, setSelectedMedia] = useState<MediaItem>(TEST_MEDIA_FIXTURES[0]);
   const [isTheaterOpen, setIsTheaterOpen] = useState<boolean>(false);
 
   // User Watch History & My List (Watchlist)
-  const [watchHistory, setWatchHistory] = useState<WatchHistoryEntry[]>(INITIAL_WATCH_HISTORY);
-  const [likedIds, setLikedIds] = useState<string[]>(['nx-204988', 'nx-969681', 'nx-278']);
+  const [watchHistory, setWatchHistory] = useState<WatchHistoryEntry[]>([]);
+  const [likedIds, setLikedIds] = useState<string[]>([]);
 
   // Offline Vault Downloads
   const [downloads, setDownloads] = useState<OfflineDownloadItem[]>([
@@ -294,8 +328,12 @@ export default function App() {
         setActiveTab('anime');
       } else if (path === '/watchlist') {
         setActiveTab('my-list');
-      } else if (path === '/profile' || path === '/auth') {
+      } else if (path === '/profile' || path === '/auth' || path === '/settings') {
         setActiveTab('profile');
+      } else if (path === '/ai-voice' || path === '/concierge') {
+        setActiveTab('ai-voice');
+      } else if (path === '/offline' || path === '/vault' || path === '/social') {
+        setActiveTab('offline-social');
       }
     };
 
@@ -304,105 +342,155 @@ export default function App() {
     return () => window.removeEventListener('popstate', syncFromUrl);
   }, []);
 
-  // Load unified catalog & independent feeds (trending, popular movies, popular TV) + health
+  // Load Codex authoritative catalog feed & independent category feeds + health
   const loadInitialFeeds = () => {
     setCatalogLoading(true);
+    setTrendingLoading(true);
+    setPopularMoviesLoading(true);
+    setPopularTvLoading(true);
     setCatalogError(null);
+    setIsProviderUnavailable(false);
+    setProviderErrorCode(null);
 
     // 0. Check Catalog Health
     fetch('/api/health/catalog')
-      .then((r) => r.json())
+      .then((r) => {
+        if (r.status === 503) {
+          setIsProviderUnavailable(true);
+          setProviderErrorCode(503);
+        }
+        return r.json().catch(() => null);
+      })
       .then((data) => {
-        if (data.providers) {
-          setProviderHealth({
-            tmdbReachable: Boolean(data.providers.tmdb?.reachable),
-            nxshaReachable: Boolean(data.providers.nxsha?.reachable),
-            authType: data.providers.tmdb?.authType,
-          });
+        if (!data) return;
+        const reachable = Boolean(data.provider?.catalogApi?.status === 'available' || data.status === 'healthy');
+        setProviderHealth({
+          nxshaReachable: reachable,
+          catalogSource: reachable ? 'Nxsha.space Live Catalog' : 'Nxsha Catalog Unavailable (503)',
+        });
+        if (!reachable) {
+          setIsProviderUnavailable(true);
+          setProviderErrorCode(503);
         }
       })
       .catch(() => {});
 
-    // 1. Unified Catalog Feed (page 1)
+    // 1. Authoritative Codex Catalog Feed (/api/catalog/feed)
     fetch('/api/catalog/feed?section=all&page=1&pageSize=36')
-      .then((r) => r.json())
+      .then(async (resp) => {
+        if (resp.status === 503) {
+          setIsProviderUnavailable(true);
+          setProviderErrorCode(503);
+          setCatalog([]);
+          setNxshaSourceLabel('Nxsha catalog unavailable (HTTP 503)');
+          setCatalogError('Nxsha catalog provider is currently unavailable (HTTP 503 Service Unavailable).');
+          return null;
+        }
+        if (!resp.ok) {
+          setCatalog([]);
+          setCatalogError(`Catalog service responded with HTTP ${resp.status}`);
+          return null;
+        }
+        return resp.json().catch(() => null);
+      })
       .then((data) => {
+        if (!data) return;
+        if (data.state === 'unavailable' || data.code === 'NXSHA_CATALOG_API_ACCESS_REQUIRED') {
+          setIsProviderUnavailable(true);
+          setProviderErrorCode(503);
+          setCatalog([]);
+          setNxshaSourceLabel('Nxsha catalog unavailable (HTTP 503)');
+          setCatalogError(data.message || 'Nxsha catalog provider is currently unavailable.');
+          return;
+        }
         if (Array.isArray(data.items) && data.items.length > 0) {
+          setIsProviderUnavailable(false);
           setCatalog((prev) => deduplicateAndMergeCatalog(data.items, prev));
-          setNxshaSourceLabel(data.source || 'CineTogether Unified Live Catalog');
+          setNxshaSourceLabel(`Nxsha Catalog (${data.totalCatalogSize || data.items.length} Verified Titles)`);
           setIsDemoData(Boolean(data.isDemoFallback));
           setCatalogBackendPage(1);
           setCatalogBackendHasMore(Boolean(data.hasMore));
+          setProviderHealth({
+            nxshaReachable: Boolean(data.liveConnected),
+            catalogSource: data.liveConnected ? 'Nxsha.space Live Catalog' : 'Nxsha Catalog (Cached)',
+          });
+          setSelectedMedia((curr) => curr || data.items[0]);
+
+          const allItems: MediaItem[] = data.items;
+          const movies = allItems.filter((i) => i.mediaType === 'movie');
+          const tvs = allItems.filter((i) => i.mediaType === 'tv');
+          const trending = allItems.filter((i) => i.isPopularThisWeek || i.rating >= 8.0).slice(0, 14);
+          if (trending.length > 0) setTrendingFeed(trending);
+          if (movies.length > 0) setPopularMoviesFeed(movies.slice(0, 14));
+          if (tvs.length > 0) setPopularTvFeed(tvs.slice(0, 14));
+        } else {
+          setIsProviderUnavailable(true);
+          setCatalog([]);
+          setCatalogError('Catalog provider returned 0 records.');
         }
       })
       .catch(() => {
-        setCatalogError('Could not load live catalog. Check network or retry.');
+        setIsProviderUnavailable(true);
+        setProviderErrorCode(503);
+        setCatalog([]);
+        setCatalogError('Could not load catalog feed. Check network or retry.');
       })
       .finally(() => {
         setCatalogLoading(false);
+        setTrendingLoading(false);
+        setPopularMoviesLoading(false);
+        setPopularTvLoading(false);
       });
-
-    // 2. Independent TMDB Trending Feed
-    setTrendingLoading(true);
-    fetch('/api/catalog/feed?section=trending&page=1&pageSize=12')
-      .then((r) => r.json())
-      .then((data) => {
-        if (Array.isArray(data.items)) {
-          setTrendingFeed(data.items);
-        }
-      })
-      .catch(() => {})
-      .finally(() => setTrendingLoading(false));
-
-    // 3. Independent TMDB Popular Movies Feed
-    setPopularMoviesLoading(true);
-    fetch('/api/catalog/feed?section=popular-movies&page=1&pageSize=12')
-      .then((r) => r.json())
-      .then((data) => {
-        if (Array.isArray(data.items)) {
-          setPopularMoviesFeed(data.items);
-        }
-      })
-      .catch(() => {})
-      .finally(() => setPopularMoviesLoading(false));
-
-    // 4. Independent TMDB Popular TV Feed
-    setPopularTvLoading(true);
-    fetch('/api/catalog/feed?section=popular-tv&page=1&pageSize=12')
-      .then((r) => r.json())
-      .then((data) => {
-        if (Array.isArray(data.items)) {
-          setPopularTvFeed(data.items);
-        }
-      })
-      .catch(() => {})
-      .finally(() => setPopularTvLoading(false));
   };
 
   useEffect(() => {
     loadInitialFeeds();
 
-    fetch(`/api/watchlist?userId=${encodeURIComponent(userProfile.uid)}`)
-      .then((r) => r.json())
+    if (userProfile.isGuest) return;
+
+    apiFetch('/api/watchlist')
+      .then((r) => (r.ok ? r.json() : null))
       .then((data) => {
-        if (Array.isArray(data.items) && data.items.length > 0) {
+        if (Array.isArray(data?.items) && data.items.length > 0) {
           const dbIds = data.items.map((i: { mediaId: string }) => i.mediaId);
           setLikedIds((prev) => Array.from(new Set([...prev, ...dbIds])));
         }
       })
       .catch(() => {});
-  }, [userProfile.uid]);
 
-  // Handle Dynamic "Load More" from backend provider
+    apiFetch('/api/watch-history')
+      .then((r) => (r.ok ? r.json() : null))
+      .then((data) => {
+        if (Array.isArray(data?.items)) {
+          setWatchHistory(
+            data.items.map((row: any) => ({
+              mediaId: row.mediaId,
+              watchedAt: row.lastWatchedAt || new Date().toISOString(),
+              progressSeconds: row.progressSeconds || 0,
+              durationSeconds: row.durationSeconds || 7200,
+              completed: Boolean(row.endedAt),
+              genres: [],
+              platform: 'Unverified',
+              roomType: row.roomType === 'couple' || row.roomType === 'group' ? row.roomType : 'solo',
+            }))
+          );
+        }
+      })
+      .catch(() => {});
+  }, [userProfile.isGuest, userProfile.uid]);
+
+  // Handle Dynamic "Load More" from Codex backend provider
   const handleLoadMoreCatalog = async () => {
     if (catalogLoadingMore) return;
     setCatalogLoadingMore(true);
 
     const section =
       categoryFilter === 'movie'
-        ? 'popular-movies'
+        ? 'movie'
         : categoryFilter === 'tv'
-        ? 'popular-tv'
+        ? 'tv'
+        : categoryFilter === 'anime'
+        ? 'anime'
         : 'all';
     const nextPage = catalogBackendPage + 1;
 
@@ -428,7 +516,7 @@ export default function App() {
     }
   };
 
-  // Debounced server-backed multi-provider search against /api/catalog/search?q=...
+  // Debounced server-backed search against Codex /api/catalog/search?q=...
   useEffect(() => {
     const trimmed = searchQuery.trim();
     setCatalogPage(1);
@@ -442,9 +530,7 @@ export default function App() {
     setLiveSearchLoading(true);
     const timer = setTimeout(() => {
       fetch(
-        `/api/catalog/search?q=${encodeURIComponent(trimmed)}&type=${
-          categoryFilter === 'all' ? 'all' : categoryFilter
-        }`
+        `/api/catalog/search?q=${encodeURIComponent(trimmed)}`
       )
         .then((r) => r.json())
         .then((data) => {
@@ -453,7 +539,7 @@ export default function App() {
             setCatalog((prev) => deduplicateAndMergeCatalog(data.items, prev));
             setServerSearchMetadata({
               totalResults: data.totalResults ?? data.items.length,
-              providers: data.providers || ['tmdb', 'nxsha'],
+              providers: data.providers || ['Nxsha Catalog'],
               query: trimmed,
             });
           }
@@ -498,6 +584,10 @@ export default function App() {
           ? `/room/group/${activeRoomCode}`
           : tab === 'profile'
           ? '/profile'
+          : tab === 'ai-voice'
+          ? '/ai-voice'
+          : tab === 'offline-social'
+          ? '/vault'
           : '/');
       window.history.pushState({}, '', targetUrl);
     } catch {
@@ -510,6 +600,41 @@ export default function App() {
     setTimeout(() => {
       setStatusBanner((prev) => (prev === msg ? null : prev));
     }, 3200);
+  };
+
+  const launchParty = async (item: MediaItem, mode: RoomMode) => {
+    try {
+      const response = await apiFetch('/api/party/rooms', {
+        method: 'POST',
+        body: JSON.stringify({
+          mode,
+          roomName: mode === 'couple' ? 'Couple Cinema' : 'Group Cinema',
+          hostName: userProfile.displayName,
+          mediaId: item.id,
+          mediaType: item.mediaType,
+          maxParticipants: mode === 'couple' ? 2 : 10,
+          collaborativeControls: mode === 'couple',
+        }),
+      }, { allowGuest: true, displayName: userProfile.displayName });
+      const result = await response.json();
+      if (response.ok && result.room?.roomCode) {
+        if (result.roomAccessToken) {
+          saveRoomAccessToken(result.room.roomCode, result.roomAccessToken);
+        }
+        setSelectedMedia(item);
+        setActiveRoomMode(mode);
+        setActiveRoomCode(result.room.roomCode);
+        navigateToTab(mode === 'couple' ? 'couple-room' : 'group-room', `/room/${mode}/${result.room.roomCode}`);
+        return;
+      }
+    } catch {
+      // Graceful fallback to client room
+    }
+    const fallbackCode = mode === 'couple' ? `LOVE-${Math.floor(1000 + Math.random() * 9000)}` : `CLUB-${Math.floor(1000 + Math.random() * 9000)}`;
+    setSelectedMedia(item);
+    setActiveRoomMode(mode);
+    setActiveRoomCode(fallbackCode);
+    navigateToTab(mode === 'couple' ? 'couple-room' : 'group-room', `/room/${mode}/${fallbackCode}`);
   };
 
   // Filtered catalog & Paginated Slice
@@ -548,9 +673,134 @@ export default function App() {
     [catalog, watchHistory, likedIds]
   );
 
+  // 16 Thematic Homepage Collections for Carousel Rows
+  const trendingMovies = useMemo(
+    () =>
+      trendingFeed.length > 0
+        ? trendingFeed.filter((i) => i.mediaType === 'movie')
+        : catalog.filter((i) => i.isTrending && i.mediaType === 'movie'),
+    [trendingFeed, catalog]
+  );
+
+  const popularMovies = useMemo(
+    () =>
+      popularMoviesFeed.length > 0
+        ? popularMoviesFeed
+        : catalog.filter((i) => i.mediaType === 'movie').sort((a, b) => b.rating - a.rating),
+    [popularMoviesFeed, catalog]
+  );
+
+  const topRatedMovies = useMemo(
+    () => [...catalog].sort((a, b) => b.rating - a.rating).filter((i) => i.rating >= 8.0).slice(0, 24),
+    [catalog]
+  );
+
+  const recentlyReleased = useMemo(
+    () => catalog.filter((i) => i.year === '2026' || i.year === '2025' || i.isRecentlyAdded).slice(0, 24),
+    [catalog]
+  );
+
+  const upcomingMovies = useMemo(
+    () =>
+      catalog
+        .filter(
+          (i) =>
+            i.year === '2026' ||
+            i.sourceAvailability === 'unavailable' ||
+            i.playbackStatus === 'metadata-only'
+        )
+        .slice(0, 24),
+    [catalog]
+  );
+
+  const popularTvShows = useMemo(
+    () =>
+      popularTvFeed.length > 0
+        ? popularTvFeed
+        : catalog.filter((i) => i.mediaType === 'tv'),
+    [popularTvFeed, catalog]
+  );
+
+  const animeCollection = useMemo(
+    () =>
+      catalog
+        .filter(
+          (i) =>
+            i.mediaType === 'anime' ||
+            (i.genres.includes('Animation') &&
+              (i.language === 'Japanese' || i.platform === 'Crunchyroll'))
+        )
+        .slice(0, 24),
+    [catalog]
+  );
+
+  const hindiMovies = useMemo(
+    () =>
+      catalog
+        .filter(
+          (i) =>
+            i.language === 'Hindi' ||
+            i.genres.includes('Bollywood') ||
+            i.genres.includes('Hindi')
+        )
+        .slice(0, 24),
+    [catalog]
+  );
+
+  const englishMovies = useMemo(
+    () =>
+      catalog
+        .filter((i) => i.language === 'English' && i.mediaType === 'movie')
+        .slice(0, 24),
+    [catalog]
+  );
+
+  const southIndianMovies = useMemo(
+    () =>
+      catalog
+        .filter(
+          (i) =>
+            ['Telugu', 'Tamil', 'Malayalam', 'Kannada', 'South Indian'].includes(i.language) ||
+            i.genres.includes('South Indian')
+        )
+        .slice(0, 24),
+    [catalog]
+  );
+
+  const romanticMovies = useMemo(
+    () => catalog.filter((i) => i.genres.includes('Romance')).slice(0, 24),
+    [catalog]
+  );
+
+  const actionThrillerMovies = useMemo(
+    () =>
+      catalog
+        .filter(
+          (i) =>
+            i.genres.includes('Action') ||
+            i.genres.includes('Thriller') ||
+            i.genres.includes('Action & Adventure')
+        )
+        .slice(0, 24),
+    [catalog]
+  );
+
+  const continueWatchingMedia = useMemo(
+    () =>
+      watchHistory
+        .map((entry) => catalog.find((c) => c.id === entry.mediaId))
+        .filter((c): c is MediaItem => Boolean(c)),
+    [watchHistory, catalog]
+  );
+
+  const recommendedMedia = useMemo(
+    () => recommendations.map((r) => r.item).slice(0, 24),
+    [recommendations]
+  );
+
   const coupleFavorites = useMemo(
     () =>
-      [...catalog].sort((a, b) => (b.coupleScore || 85) - (a.coupleScore || 85)).slice(0, 4),
+      [...catalog].sort((a, b) => (b.coupleScore || 85) - (a.coupleScore || 85)).slice(0, 24),
     [catalog]
   );
 
@@ -558,17 +808,7 @@ export default function App() {
     () =>
       [...catalog]
         .sort((a, b) => (b.groupNightScore || 85) - (a.groupNightScore || 85))
-        .slice(0, 4),
-    [catalog]
-  );
-
-  const popularThisWeek = useMemo(
-    () => catalog.filter((c) => c.isPopularThisWeek || c.rating >= 8.7).slice(0, 4),
-    [catalog]
-  );
-
-  const recentlyAdded = useMemo(
-    () => catalog.filter((c) => c.isRecentlyAdded).slice(0, 4),
+        .slice(0, 24),
     [catalog]
   );
 
@@ -576,6 +816,44 @@ export default function App() {
     () => catalog.filter((c) => likedIds.includes(c.id)),
     [catalog, likedIds]
   );
+
+  const spotlightItems = useMemo(() => {
+    const featured = catalog.filter((c) => c.backdropUrl && c.rating >= 7.5);
+    return featured.length > 0 ? featured.slice(0, 5) : catalog.slice(0, 5);
+  }, [catalog]);
+
+  const handleNextSpotlight = () => {
+    if (spotlightItems.length === 0) return;
+    const currentIndex = spotlightItems.findIndex((s) => s.id === selectedMedia.id);
+    const nextIndex = (currentIndex + 1) % spotlightItems.length;
+    setSelectedMedia(spotlightItems[nextIndex]);
+  };
+
+  const handlePrevSpotlight = () => {
+    if (spotlightItems.length === 0) return;
+    const currentIndex = spotlightItems.findIndex((s) => s.id === selectedMedia.id);
+    const prevIndex = (currentIndex - 1 + spotlightItems.length) % spotlightItems.length;
+    setSelectedMedia(spotlightItems[prevIndex]);
+  };
+
+  const handleResetFilters = () => {
+    setSearchQuery('');
+    if (activeTab === 'movies') {
+      setCategoryFilter('movie');
+    } else if (activeTab === 'tv') {
+      setCategoryFilter('tv');
+    } else if (activeTab === 'anime') {
+      setCategoryFilter('anime');
+    } else {
+      setCategoryFilter('all');
+    }
+    setPlatformFilter('All Platforms');
+    setGenreFilter('All Genres');
+    setYearFilter('All Years');
+    setLanguageFilter('All Languages');
+    setSortBy('popularity');
+    setCatalogPage(1);
+  };
 
   const handleStartWatching = (item: MediaItem) => {
     setSelectedMedia(item);
@@ -600,19 +878,19 @@ export default function App() {
         ];
       });
 
-      fetch('/api/sessions/record', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({
-          userId: userProfile.uid,
-          mediaId: item.id,
-          mediaTitle: item.title,
-          mediaType: item.mediaType,
-          roomType: 'solo',
-          progressSeconds: 300,
-          durationSeconds: (item.durationMinutes || 110) * 60,
-        }),
-      }).catch(() => {});
+      if (!userProfile.isGuest) {
+        apiFetch('/api/sessions/record', {
+          method: 'POST',
+          body: JSON.stringify({
+            mediaId: item.id,
+            mediaTitle: item.title,
+            mediaType: item.mediaType || 'movie',
+            roomType: 'solo',
+            progressSeconds: 300,
+            durationSeconds: (item.durationMinutes || 110) * 60,
+          }),
+        }).catch(() => {});
+      }
     }
   };
 
@@ -680,28 +958,43 @@ export default function App() {
     setLikedIds((prev) =>
       alreadyLiked ? prev.filter((id) => id !== item.id) : [...prev, item.id]
     );
-    triggerBanner(
-      alreadyLiked
-        ? `Removed "${item.title}" from My List.`
-        : `Saved "${item.title}" to My List (Cloud SQL Synced).`
-    );
+
+    if (userProfile.isGuest) {
+      triggerBanner(
+        alreadyLiked
+          ? `Removed "${item.title}" from this session's My List.`
+          : `Saved "${item.title}" for this browser session. Sign in to sync it across devices.`
+      );
+      return;
+    }
 
     try {
-      await fetch('/api/watchlist/toggle', {
+      const response = await apiFetch('/api/watchlist/toggle', {
         method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
-          userId: userProfile.uid,
           mediaId: item.id,
           mediaTitle: item.title,
           mediaType: item.mediaType,
-          posterUrl: `/poster/${item.id}`,
-          year: item.year,
-          rating: item.rating,
+          posterUrl: item.posterUrl || '',
+          year: item.year || '',
+          rating: typeof item.rating === 'number' ? item.rating : 0,
         }),
       });
+
+      if (!response.ok) {
+        throw new Error('Watchlist synchronization rejected by server.');
+      }
+
+      triggerBanner(
+        alreadyLiked
+          ? `Removed "${item.title}" from My List.`
+          : `Saved "${item.title}" to My List (Cloud SQL Synced).`
+      );
     } catch {
-      // Optimistic state preserved
+      setLikedIds((prev) =>
+        alreadyLiked ? [...prev, item.id] : prev.filter((id) => id !== item.id)
+      );
+      triggerBanner('Could not sync watchlist to database. Please sign in or retry.');
     }
   };
 
@@ -743,10 +1036,10 @@ export default function App() {
           </div>
         </a>
 
-        {/* Persistent Navigation Links: Home | Movies | TV Shows | Anime | My List | Watch Parties */}
+        {/* Persistent Navigation Links */}
         <nav
           aria-label="Primary Streaming Navigation"
-          className="hidden lg:flex items-center gap-5 text-xs font-medium"
+          className="hidden lg:flex items-center gap-4 text-xs font-medium"
         >
           {(
             [
@@ -754,11 +1047,13 @@ export default function App() {
               { id: 'movies', label: 'Movies' },
               { id: 'tv', label: 'TV Shows' },
               { id: 'anime', label: 'Anime' },
-              { id: 'my-list', label: `My List (${likedIds.length})` },
+              { id: 'create-party', label: 'Watch Party' },
+              { id: 'my-list', label: `Watchlist (${likedIds.length})` },
               { id: 'couple-room', label: 'Couple Cinema ❤️' },
               { id: 'group-room', label: 'Group Cinema 🎉' },
-              { id: 'ai-voice', label: 'AI Companion' },
-              { id: 'offline-social', label: 'Offline & Social' },
+              { id: 'ai-voice', label: 'AI Concierge ✦' },
+              { id: 'offline-social', label: 'Vault & Settings' },
+              { id: 'profile', label: 'Profile' },
             ] as const
           ).map((navItem) => {
             const isActive = activeTab === navItem.id;
@@ -769,7 +1064,7 @@ export default function App() {
                 onClick={() => navigateToTab(navItem.id)}
                 className={`transition-colors whitespace-nowrap shrink-0 pb-1 ${
                   isActive
-                    ? 'text-violet-300 border-b-2 border-violet-400 font-semibold'
+                    ? 'text-violet-300 border-b-2 border-violet-400 font-semibold shadow-sm'
                     : 'text-slate-400 hover:text-white'
                 }`}
               >
@@ -827,8 +1122,18 @@ export default function App() {
                   setActiveTab('home');
                 }
               }}
-              className="w-full pl-9 pr-3 py-1.5 text-xs rounded-xl border border-slate-800 bg-slate-900/90 text-slate-100 placeholder:text-slate-500 focus:outline-none focus:border-violet-500"
+              className="w-full pl-9 pr-8 py-1.5 text-xs rounded-xl border border-slate-800 bg-slate-900/90 text-slate-100 placeholder:text-slate-500 focus:outline-none focus:border-violet-500 transition-colors"
             />
+            {searchQuery && (
+              <button
+                type="button"
+                onClick={() => setSearchQuery('')}
+                aria-label="Clear search input"
+                className="absolute right-2.5 top-1/2 -translate-y-1/2 text-slate-400 hover:text-white p-0.5 rounded-full hover:bg-slate-800 transition-colors text-xs font-bold leading-none"
+              >
+                ✕
+              </button>
+            )}
           </div>
 
           <div className="flex items-center gap-2 flex-wrap">
@@ -839,10 +1144,22 @@ export default function App() {
             >
               <span
                 className={`w-2 h-2 rounded-full ${
-                  isDemoData ? 'bg-amber-400' : 'bg-emerald-400'
+                  isProviderUnavailable
+                    ? 'bg-amber-400'
+                    : isDemoData
+                    ? 'bg-sky-400'
+                    : catalogLoading
+                    ? 'bg-slate-400 animate-pulse'
+                    : 'bg-emerald-400'
                 }`}
               />
-              <span>{isDemoData ? 'Demo Catalog + Cloud SQL Active' : nxshaSourceLabel}</span>
+              <span>
+                {isProviderUnavailable
+                  ? 'Nxsha catalog unavailable (503)'
+                  : isDemoData
+                  ? 'Offline Sample Content'
+                  : nxshaSourceLabel}
+              </span>
             </span>
 
             {/* Dark Mode / Ambient Contrast Toggle */}
@@ -928,7 +1245,7 @@ export default function App() {
       {/* Main Content Container */}
       <main className="max-w-7xl mx-auto px-4 sm:px-6 py-8 space-y-10">
         {/* Inline Solo Adaptive Video Player Drawer */}
-        {isTheaterOpen && activeTab === 'home' && (
+        {isTheaterOpen && (
           <section aria-label="Active Cinema Theater" className="space-y-4">
             <AdaptiveVideoPlayer
               item={selectedMedia}
@@ -947,12 +1264,12 @@ export default function App() {
           activeTab === 'anime') && (
           <div className="space-y-12">
             {/* Large Cinematic Hero Banner */}
-            {!isTheaterOpen && (
+            {!isTheaterOpen && !isProviderUnavailable && catalog.length > 0 && selectedMedia && (
               <section
                 aria-label="Featured Release Spotlight"
-                className="grid grid-cols-1 lg:grid-cols-12 gap-6 items-stretch bg-gradient-to-br from-slate-900 via-[#121026] to-slate-950 border border-violet-500/20 rounded-3xl overflow-hidden shadow-2xl"
+                className="grid grid-cols-1 lg:grid-cols-12 gap-6 items-stretch bg-gradient-to-br from-slate-900 via-[#121026] to-slate-950 border border-violet-500/20 rounded-3xl overflow-hidden shadow-2xl relative"
               >
-                <div className="lg:col-span-7 p-6 sm:p-10 flex flex-col justify-between space-y-6">
+                <div className="lg:col-span-7 p-6 sm:p-10 flex flex-col justify-between space-y-6 z-10">
                   <div className="space-y-4">
                     <div className="flex flex-wrap items-center gap-2 text-xs font-mono tabular-nums">
                       <span className="px-2.5 py-0.5 rounded-full bg-violet-500/20 text-violet-300 border border-violet-500/30 font-semibold">
@@ -993,7 +1310,7 @@ export default function App() {
                     <button
                       type="button"
                       onClick={() => handleStartWatching(selectedMedia)}
-                      className="inline-flex items-center gap-2 px-5 py-3 text-xs sm:text-sm font-semibold bg-white hover:bg-slate-200 text-slate-950 rounded-xl transition-colors whitespace-nowrap shrink-0 shadow-lg"
+                      className="inline-flex items-center gap-2 px-5 py-3 text-xs sm:text-sm font-semibold bg-white hover:bg-slate-200 text-slate-950 rounded-xl transition-all whitespace-nowrap shrink-0 shadow-lg hover:scale-105 active:scale-95"
                     >
                       <Play className="w-4 h-4 fill-current" />
                       <span>Watch Solo</span>
@@ -1006,7 +1323,7 @@ export default function App() {
                         setActiveRoomCode('LOVE-2026');
                         navigateToTab('couple-room', '/room/couple/LOVE-2026');
                       }}
-                      className="inline-flex items-center gap-2 px-4 py-3 text-xs sm:text-sm font-semibold bg-gradient-to-r from-rose-500 to-pink-600 hover:from-rose-400 hover:to-pink-500 text-white rounded-xl transition-all whitespace-nowrap shrink-0 shadow-lg"
+                      className="inline-flex items-center gap-2 px-4 py-3 text-xs sm:text-sm font-semibold bg-gradient-to-r from-rose-500 to-pink-600 hover:from-rose-400 hover:to-pink-500 text-white rounded-xl transition-all whitespace-nowrap shrink-0 shadow-lg hover:scale-105 active:scale-95"
                     >
                       <Heart className="w-4 h-4 fill-current" />
                       <span>Couple Cinema ❤️</span>
@@ -1019,7 +1336,7 @@ export default function App() {
                         setActiveRoomCode('CLUB-4096');
                         navigateToTab('group-room', '/room/group/CLUB-4096');
                       }}
-                      className="inline-flex items-center gap-2 px-4 py-3 text-xs sm:text-sm font-semibold bg-gradient-to-r from-violet-600 to-indigo-600 hover:from-violet-500 hover:to-indigo-500 text-white rounded-xl transition-all whitespace-nowrap shrink-0 shadow-lg"
+                      className="inline-flex items-center gap-2 px-4 py-3 text-xs sm:text-sm font-semibold bg-gradient-to-r from-violet-600 to-indigo-600 hover:from-violet-500 hover:to-indigo-500 text-white rounded-xl transition-all whitespace-nowrap shrink-0 shadow-lg hover:scale-105 active:scale-95"
                     >
                       <Users className="w-4 h-4" />
                       <span>Group Cinema 🎉</span>
@@ -1053,12 +1370,50 @@ export default function App() {
                   </div>
                 </div>
 
-                <div className="lg:col-span-5 relative min-h-[260px] lg:min-h-full">
+                <div className="lg:col-span-5 relative min-h-[280px] lg:min-h-full overflow-hidden">
                   <MediaPoster
                     item={selectedMedia}
                     variant="backdrop"
                     className="w-full h-full object-cover"
                   />
+                  <div className="absolute inset-0 bg-gradient-to-t from-slate-950 via-transparent to-transparent pointer-events-none lg:hidden" />
+
+                  {/* Spotlight Carousel Navigation */}
+                  {spotlightItems.length > 1 && (
+                    <div className="absolute bottom-4 right-4 z-20 flex items-center gap-2 bg-slate-950/85 backdrop-blur-md px-3 py-1.5 rounded-full border border-white/10 shadow-lg">
+                      <button
+                        type="button"
+                        onClick={handlePrevSpotlight}
+                        aria-label="Previous featured spotlight"
+                        className="p-1 rounded-full hover:bg-white/10 text-slate-300 hover:text-white transition-colors"
+                      >
+                        <ChevronLeft className="w-3.5 h-3.5" />
+                      </button>
+                      <div className="flex items-center gap-1.5">
+                        {spotlightItems.map((item) => (
+                          <button
+                            key={item.id}
+                            type="button"
+                            onClick={() => setSelectedMedia(item)}
+                            aria-label={`Switch spotlight to ${item.title}`}
+                            className={`h-1.5 rounded-full transition-all ${
+                              item.id === selectedMedia.id
+                                ? 'w-5 bg-violet-400'
+                                : 'w-1.5 bg-slate-600 hover:bg-slate-400'
+                            }`}
+                          />
+                        ))}
+                      </div>
+                      <button
+                        type="button"
+                        onClick={handleNextSpotlight}
+                        aria-label="Next featured spotlight"
+                        className="p-1 rounded-full hover:bg-white/10 text-slate-300 hover:text-white transition-colors"
+                      >
+                        <ChevronRight className="w-3.5 h-3.5" />
+                      </button>
+                    </div>
+                  )}
                 </div>
               </section>
             )}
@@ -1068,27 +1423,17 @@ export default function App() {
               <div className="flex flex-wrap items-center justify-between gap-3 p-3.5 rounded-2xl bg-slate-900/60 border border-slate-800 text-xs">
                 <div className="flex flex-wrap items-center gap-3">
                   <Database className="w-4 h-4 text-violet-400" />
-                  <span className="text-slate-300 font-medium">Live Providers:</span>
+                  <span className="text-slate-300 font-medium">Catalog Provider:</span>
                   <div className="flex items-center gap-2">
                     <span
                       className={`inline-flex items-center gap-1.5 px-2.5 py-0.5 rounded-full font-mono text-[11px] ${
-                        providerHealth.tmdbReachable
+                        providerHealth?.nxshaReachable
                           ? 'bg-emerald-500/15 text-emerald-300 border border-emerald-500/30'
                           : 'bg-amber-500/15 text-amber-300 border border-amber-500/30'
                       }`}
                     >
                       <span className="w-1.5 h-1.5 rounded-full bg-current animate-pulse" />
-                      TMDB v3 ({providerHealth.tmdbReachable ? 'Online · Live Sync' : 'Degraded'})
-                    </span>
-                    <span
-                      className={`inline-flex items-center gap-1.5 px-2.5 py-0.5 rounded-full font-mono text-[11px] ${
-                        providerHealth.nxshaReachable
-                          ? 'bg-emerald-500/15 text-emerald-300 border border-emerald-500/30'
-                          : 'bg-amber-500/15 text-amber-300 border border-amber-500/30'
-                      }`}
-                    >
-                      <span className="w-1.5 h-1.5 rounded-full bg-current" />
-                      Nxsha Stream ({providerHealth.nxshaReachable ? 'Online · Multi-Section' : 'Degraded'})
+                      Nxsha Catalog: {providerHealth?.nxshaReachable ? 'Live Connected' : 'Official API Access Required (Unavailable)'}
                     </span>
                   </div>
                 </div>
@@ -1098,8 +1443,81 @@ export default function App() {
               </div>
             )}
 
+            {/* Dedicated Provider Unavailable Screen (When backend returns HTTP 503 or unreachable) */}
+            {isProviderUnavailable && (
+              <div className="p-6 sm:p-8 rounded-3xl bg-gradient-to-br from-slate-900/95 via-rose-950/25 to-slate-900/95 border border-rose-500/30 shadow-2xl backdrop-blur-xl space-y-5">
+                <div className="flex flex-col sm:flex-row items-start sm:items-center justify-between gap-4 pb-4 border-b border-rose-500/20">
+                  <div className="flex items-center gap-3.5">
+                    <div className="p-3 rounded-2xl bg-rose-500/10 border border-rose-500/30 text-rose-400">
+                      <AlertCircle className="w-6 h-6" />
+                    </div>
+                    <div>
+                      <h2 className="text-lg sm:text-xl font-display font-bold text-white tracking-tight">
+                        Catalog Provider Unavailable
+                      </h2>
+                      <p className="text-xs text-rose-300 font-mono">
+                        {providerErrorCode ? `HTTP ${providerErrorCode} Service Unavailable` : 'Upstream Catalog Unreachable'} · Nxsha Provider
+                      </p>
+                    </div>
+                  </div>
+                  <div className="flex items-center gap-2">
+                    <span className="px-3 py-1 rounded-full bg-rose-500/20 border border-rose-500/40 text-rose-300 text-xs font-mono font-medium">
+                      Live Ingestion Offline
+                    </span>
+                  </div>
+                </div>
+
+                <p className="text-sm text-slate-300 leading-relaxed max-w-3xl">
+                  The primary upstream media provider is currently unreachable or degraded. CineTogether only surfaces authentic catalog metadata and strictly avoids fabricating fake movie titles or mock streams.
+                </p>
+
+                {/* Status Pillars */}
+                <div className="grid grid-cols-1 sm:grid-cols-3 gap-3 text-xs">
+                  <div className="p-3.5 rounded-2xl bg-slate-950/60 border border-slate-800 space-y-1">
+                    <span className="text-slate-400 font-mono text-[11px] block">Ingestion Status</span>
+                    <span className="text-rose-400 font-medium font-mono">503 Service Unavailable</span>
+                  </div>
+                  <div className="p-3.5 rounded-2xl bg-slate-950/60 border border-slate-800 space-y-1">
+                    <span className="text-slate-400 font-mono text-[11px] block">Catalog Guard</span>
+                    <span className="text-emerald-400 font-medium font-mono">Zero Fabricated Records</span>
+                  </div>
+                  <div className="p-3.5 rounded-2xl bg-slate-950/60 border border-slate-800 space-y-1">
+                    <span className="text-slate-400 font-mono text-[11px] block">Playback Security</span>
+                    <span className="text-violet-400 font-medium font-mono">Drizzle/PostgreSQL DB</span>
+                  </div>
+                </div>
+
+                <div className="flex flex-wrap items-center gap-3 pt-2">
+                  <button
+                    type="button"
+                    onClick={() => loadInitialFeeds()}
+                    className="px-4 py-2.5 rounded-xl bg-rose-600 hover:bg-rose-500 text-white text-xs font-semibold inline-flex items-center gap-2 transition-colors shadow-lg"
+                  >
+                    <RefreshCw className="w-3.5 h-3.5" />
+                    <span>Retry Provider Connection</span>
+                  </button>
+                  <button
+                    type="button"
+                    onClick={handleLoadTestFixtures}
+                    className="px-4 py-2.5 rounded-xl bg-slate-800 hover:bg-slate-700 text-slate-200 text-xs font-semibold inline-flex items-center gap-2 transition-colors border border-slate-700"
+                  >
+                    <Play className="w-3.5 h-3.5 text-violet-400" />
+                    <span>Open Isolated Test Media Fixtures (Offline Verification Sample)</span>
+                  </button>
+                  <button
+                    type="button"
+                    onClick={handleLoadOfflineCuratedSample}
+                    className="px-4 py-2.5 rounded-xl bg-violet-950/40 hover:bg-violet-900/40 text-violet-300 text-xs font-semibold inline-flex items-center gap-2 transition-colors border border-violet-700/50"
+                  >
+                    <Film className="w-3.5 h-3.5 text-violet-400" />
+                    <span>Explore Curated Offline Sample Content</span>
+                  </button>
+                </div>
+              </div>
+            )}
+
             {/* Error Banner with Retry */}
-            {catalogError && (
+            {catalogError && !isProviderUnavailable && (
               <div className="p-4 rounded-2xl bg-rose-950/30 border border-rose-500/40 flex items-center justify-between gap-4">
                 <div className="flex items-center gap-2.5 text-xs text-rose-200">
                   <AlertCircle className="w-4 h-4 text-rose-400 shrink-0" />
@@ -1115,8 +1533,414 @@ export default function App() {
               </div>
             )}
 
-            {/* Category, Genre, Year, Language & Sort Filter Bar */}
-            <section aria-label="Catalog Filter Controls" className="space-y-3">
+            {/* Empty Catalog Notice */}
+            {!catalogLoading && !isProviderUnavailable && !catalogError && filteredCatalog.length === 0 && (
+              <div role="status" className="p-6 rounded-2xl bg-slate-900/60 border border-slate-800 text-sm text-slate-300">
+                {searchQuery ? `No Nxsha titles matched “${searchQuery}”.` : 'The Nxsha catalog is currently empty.'}
+              </div>
+            )}
+
+            {/* HOMEPAGE THEMATIC HORIZONTAL CAROUSELS (when on Home, not searching, and catalog has items) */}
+            {activeTab === 'home' && !searchQuery.trim() && !isProviderUnavailable && catalog.length > 0 && (
+              <div className="space-y-10">
+                {/* 3. Trending Movies */}
+                <HorizontalPosterCarousel
+                  title="Trending Movies"
+                  subtitle="Top trending theatrical and streaming releases worldwide"
+                  icon={<Flame className="w-5 h-5 text-amber-400" />}
+                  badge="🔥 Trending on Nxsha"
+                  items={trendingMovies}
+                  likedIds={likedIds}
+                  isLoading={trendingLoading}
+                  onOpenDetails={handleOpenMediaDetail}
+                  onStartWatching={handleStartWatching}
+                  onToggleWatchlist={handleToggleWatchlist}
+                  onStartCoupleParty={(item) => {
+                    setSelectedMedia(item);
+                    setActiveRoomMode('couple');
+                    navigateToTab('couple-room', '/room/couple/LOVE-2026');
+                  }}
+                  onStartGroupParty={(item) => {
+                    setSelectedMedia(item);
+                    setActiveRoomMode('group');
+                    navigateToTab('group-room', '/room/group/CLUB-4096');
+                  }}
+                  onViewAll={() => {
+                    setCategoryFilter('movie');
+                    navigateToTab('movies', '/movies');
+                  }}
+                />
+
+                {/* 4. Popular Movies */}
+                <HorizontalPosterCarousel
+                  title="Popular Movies"
+                  subtitle="Blockbusters and fan-favorite feature films"
+                  icon={<Film className="w-5 h-5 text-violet-400" />}
+                  badge="Global Hits"
+                  items={popularMovies}
+                  likedIds={likedIds}
+                  isLoading={popularMoviesLoading}
+                  onOpenDetails={handleOpenMediaDetail}
+                  onStartWatching={handleStartWatching}
+                  onToggleWatchlist={handleToggleWatchlist}
+                  onStartCoupleParty={(item) => {
+                    setSelectedMedia(item);
+                    setActiveRoomMode('couple');
+                    navigateToTab('couple-room', '/room/couple/LOVE-2026');
+                  }}
+                  onStartGroupParty={(item) => {
+                    setSelectedMedia(item);
+                    setActiveRoomMode('group');
+                    navigateToTab('group-room', '/room/group/CLUB-4096');
+                  }}
+                  onViewAll={() => {
+                    setCategoryFilter('movie');
+                    navigateToTab('movies', '/movies');
+                  }}
+                />
+
+                {/* 5. Top Rated Movies */}
+                <HorizontalPosterCarousel
+                  title="Top Rated Movies"
+                  subtitle="Highest critical acclaim and community ratings (8.0+)"
+                  icon={<Sparkles className="w-5 h-5 text-emerald-400" />}
+                  badge="Masterpieces"
+                  items={topRatedMovies}
+                  likedIds={likedIds}
+                  onOpenDetails={handleOpenMediaDetail}
+                  onStartWatching={handleStartWatching}
+                  onToggleWatchlist={handleToggleWatchlist}
+                  onStartCoupleParty={(item) => {
+                    setSelectedMedia(item);
+                    setActiveRoomMode('couple');
+                    navigateToTab('couple-room', '/room/couple/LOVE-2026');
+                  }}
+                  onStartGroupParty={(item) => {
+                    setSelectedMedia(item);
+                    setActiveRoomMode('group');
+                    navigateToTab('group-room', '/room/group/CLUB-4096');
+                  }}
+                />
+
+                {/* 6. Recently Released Movies */}
+                <HorizontalPosterCarousel
+                  title="Recently Released Movies"
+                  subtitle="Newest releases from 2025 and 2026 cinema seasons"
+                  icon={<Layers className="w-5 h-5 text-sky-400" />}
+                  badge="New Arrivals"
+                  items={recentlyReleased}
+                  likedIds={likedIds}
+                  onOpenDetails={handleOpenMediaDetail}
+                  onStartWatching={handleStartWatching}
+                  onToggleWatchlist={handleToggleWatchlist}
+                  onStartCoupleParty={(item) => {
+                    setSelectedMedia(item);
+                    setActiveRoomMode('couple');
+                    navigateToTab('couple-room', '/room/couple/LOVE-2026');
+                  }}
+                  onStartGroupParty={(item) => {
+                    setSelectedMedia(item);
+                    setActiveRoomMode('group');
+                    navigateToTab('group-room', '/room/group/CLUB-4096');
+                  }}
+                />
+
+                {/* 7. Upcoming Movies */}
+                <HorizontalPosterCarousel
+                  title="Upcoming Movies"
+                  subtitle="Anticipated theatrical premieres and future streaming releases"
+                  icon={<Compass className="w-5 h-5 text-fuchsia-400" />}
+                  badge="Coming Soon"
+                  items={upcomingMovies}
+                  likedIds={likedIds}
+                  onOpenDetails={handleOpenMediaDetail}
+                  onStartWatching={handleStartWatching}
+                  onToggleWatchlist={handleToggleWatchlist}
+                  onStartCoupleParty={(item) => {
+                    setSelectedMedia(item);
+                    setActiveRoomMode('couple');
+                    navigateToTab('couple-room', '/room/couple/LOVE-2026');
+                  }}
+                  onStartGroupParty={(item) => {
+                    setSelectedMedia(item);
+                    setActiveRoomMode('group');
+                    navigateToTab('group-room', '/room/group/CLUB-4096');
+                  }}
+                />
+
+                {/* 8. Popular TV Shows */}
+                <HorizontalPosterCarousel
+                  title="Popular TV Shows"
+                  subtitle="Bingeable multi-season series with episodic stream resolvers"
+                  icon={<Tv className="w-5 h-5 text-pink-400" />}
+                  badge="Series"
+                  items={popularTvShows}
+                  likedIds={likedIds}
+                  isLoading={popularTvLoading}
+                  onOpenDetails={handleOpenMediaDetail}
+                  onStartWatching={handleStartWatching}
+                  onToggleWatchlist={handleToggleWatchlist}
+                  onStartCoupleParty={(item) => {
+                    setSelectedMedia(item);
+                    setActiveRoomMode('couple');
+                    navigateToTab('couple-room', '/room/couple/LOVE-2026');
+                  }}
+                  onStartGroupParty={(item) => {
+                    setSelectedMedia(item);
+                    setActiveRoomMode('group');
+                    navigateToTab('group-room', '/room/group/CLUB-4096');
+                  }}
+                  onViewAll={() => {
+                    setCategoryFilter('tv');
+                    navigateToTab('tv', '/tv');
+                  }}
+                />
+
+                {/* 9. Anime Collection */}
+                <HorizontalPosterCarousel
+                  title="Anime Collection"
+                  subtitle="Shonen epics, fantasy adventures, and acclaimed anime series"
+                  icon={<Sparkles className="w-5 h-5 text-indigo-400" />}
+                  badge="Crunchyroll & Studio"
+                  items={animeCollection}
+                  likedIds={likedIds}
+                  onOpenDetails={handleOpenMediaDetail}
+                  onStartWatching={handleStartWatching}
+                  onToggleWatchlist={handleToggleWatchlist}
+                  onStartCoupleParty={(item) => {
+                    setSelectedMedia(item);
+                    setActiveRoomMode('couple');
+                    navigateToTab('couple-room', '/room/couple/LOVE-2026');
+                  }}
+                  onStartGroupParty={(item) => {
+                    setSelectedMedia(item);
+                    setActiveRoomMode('group');
+                    navigateToTab('group-room', '/room/group/CLUB-4096');
+                  }}
+                  onViewAll={() => {
+                    setCategoryFilter('anime');
+                    navigateToTab('anime', '/anime');
+                  }}
+                />
+
+                {/* 10. Hindi Movies */}
+                <HorizontalPosterCarousel
+                  title="Hindi Movies"
+                  subtitle="Top Bollywood cinema, gripping dramas, and grand musical spectacles"
+                  icon={<Flame className="w-5 h-5 text-rose-400" />}
+                  badge="Bollywood"
+                  items={hindiMovies}
+                  likedIds={likedIds}
+                  onOpenDetails={handleOpenMediaDetail}
+                  onStartWatching={handleStartWatching}
+                  onToggleWatchlist={handleToggleWatchlist}
+                  onStartCoupleParty={(item) => {
+                    setSelectedMedia(item);
+                    setActiveRoomMode('couple');
+                    navigateToTab('couple-room', '/room/couple/LOVE-2026');
+                  }}
+                  onStartGroupParty={(item) => {
+                    setSelectedMedia(item);
+                    setActiveRoomMode('group');
+                    navigateToTab('group-room', '/room/group/CLUB-4096');
+                  }}
+                />
+
+                {/* 11. English Movies */}
+                <HorizontalPosterCarousel
+                  title="English Movies"
+                  subtitle="Hollywood features, sci-fi sagas, and international English cinema"
+                  icon={<Film className="w-5 h-5 text-blue-400" />}
+                  badge="Hollywood"
+                  items={englishMovies}
+                  likedIds={likedIds}
+                  onOpenDetails={handleOpenMediaDetail}
+                  onStartWatching={handleStartWatching}
+                  onToggleWatchlist={handleToggleWatchlist}
+                  onStartCoupleParty={(item) => {
+                    setSelectedMedia(item);
+                    setActiveRoomMode('couple');
+                    navigateToTab('couple-room', '/room/couple/LOVE-2026');
+                  }}
+                  onStartGroupParty={(item) => {
+                    setSelectedMedia(item);
+                    setActiveRoomMode('group');
+                    navigateToTab('group-room', '/room/group/CLUB-4096');
+                  }}
+                />
+
+                {/* 12. South Indian Movies */}
+                <HorizontalPosterCarousel
+                  title="South Indian Movies"
+                  subtitle="Iconic Telugu, Tamil, Malayalam & Kannada cinematic masterstrokes"
+                  icon={<Flame className="w-5 h-5 text-amber-500" />}
+                  badge="South Cinema"
+                  items={southIndianMovies}
+                  likedIds={likedIds}
+                  onOpenDetails={handleOpenMediaDetail}
+                  onStartWatching={handleStartWatching}
+                  onToggleWatchlist={handleToggleWatchlist}
+                  onStartCoupleParty={(item) => {
+                    setSelectedMedia(item);
+                    setActiveRoomMode('couple');
+                    navigateToTab('couple-room', '/room/couple/LOVE-2026');
+                  }}
+                  onStartGroupParty={(item) => {
+                    setSelectedMedia(item);
+                    setActiveRoomMode('group');
+                    navigateToTab('group-room', '/room/group/CLUB-4096');
+                  }}
+                />
+
+                {/* 13. Romantic Movies */}
+                <HorizontalPosterCarousel
+                  title="Romantic Movies"
+                  subtitle="Intimate love stories, timeless bonds, and emotional journeys"
+                  icon={<Heart className="w-5 h-5 text-rose-400" />}
+                  badge="Romance"
+                  items={romanticMovies}
+                  likedIds={likedIds}
+                  onOpenDetails={handleOpenMediaDetail}
+                  onStartWatching={handleStartWatching}
+                  onToggleWatchlist={handleToggleWatchlist}
+                  onStartCoupleParty={(item) => {
+                    setSelectedMedia(item);
+                    setActiveRoomMode('couple');
+                    navigateToTab('couple-room', '/room/couple/LOVE-2026');
+                  }}
+                  onStartGroupParty={(item) => {
+                    setSelectedMedia(item);
+                    setActiveRoomMode('group');
+                    navigateToTab('group-room', '/room/group/CLUB-4096');
+                  }}
+                />
+
+                {/* 14. Action and Thriller */}
+                <HorizontalPosterCarousel
+                  title="Action and Thriller"
+                  subtitle="High-stakes espionage, tactical warfare, and pulse-pounding tension"
+                  icon={<Film className="w-5 h-5 text-red-400" />}
+                  badge="Adrenaline"
+                  items={actionThrillerMovies}
+                  likedIds={likedIds}
+                  onOpenDetails={handleOpenMediaDetail}
+                  onStartWatching={handleStartWatching}
+                  onToggleWatchlist={handleToggleWatchlist}
+                  onStartCoupleParty={(item) => {
+                    setSelectedMedia(item);
+                    setActiveRoomMode('couple');
+                    navigateToTab('couple-room', '/room/couple/LOVE-2026');
+                  }}
+                  onStartGroupParty={(item) => {
+                    setSelectedMedia(item);
+                    setActiveRoomMode('group');
+                    navigateToTab('group-room', '/room/group/CLUB-4096');
+                  }}
+                />
+
+                {/* 15. Continue Watching */}
+                {continueWatchingMedia.length > 0 && (
+                  <HorizontalPosterCarousel
+                    title="Continue Watching"
+                    subtitle="Pick up right where your session or watch party left off"
+                    icon={<Play className="w-5 h-5 text-violet-400" />}
+                    badge="In Progress"
+                    items={continueWatchingMedia}
+                    likedIds={likedIds}
+                    onOpenDetails={handleOpenMediaDetail}
+                    onStartWatching={handleStartWatching}
+                    onToggleWatchlist={handleToggleWatchlist}
+                    onStartCoupleParty={(item) => {
+                      setSelectedMedia(item);
+                      setActiveRoomMode('couple');
+                      navigateToTab('couple-room', '/room/couple/LOVE-2026');
+                    }}
+                    onStartGroupParty={(item) => {
+                      setSelectedMedia(item);
+                      setActiveRoomMode('group');
+                      navigateToTab('group-room', '/room/group/CLUB-4096');
+                    }}
+                  />
+                )}
+
+                {/* 16. Recommended For You */}
+                <HorizontalPosterCarousel
+                  title="Recommended For You"
+                  subtitle="Personalized recommendations tailored to your taste profile"
+                  icon={<Sparkles className="w-5 h-5 text-purple-400" />}
+                  badge="AI Match"
+                  items={recommendedMedia}
+                  likedIds={likedIds}
+                  onOpenDetails={handleOpenMediaDetail}
+                  onStartWatching={handleStartWatching}
+                  onToggleWatchlist={handleToggleWatchlist}
+                  onStartCoupleParty={(item) => {
+                    setSelectedMedia(item);
+                    setActiveRoomMode('couple');
+                    navigateToTab('couple-room', '/room/couple/LOVE-2026');
+                  }}
+                  onStartGroupParty={(item) => {
+                    setSelectedMedia(item);
+                    setActiveRoomMode('group');
+                    navigateToTab('group-room', '/room/group/CLUB-4096');
+                  }}
+                />
+
+                {/* 17. Couple Watch Picks */}
+                <HorizontalPosterCarousel
+                  title="Couple Watch Picks ❤️"
+                  subtitle="Curated for two participants with Rose Nebula ambiance and synchronized hearts"
+                  icon={<Heart className="w-5 h-5 text-rose-500 fill-current" />}
+                  badge="❤️ Date Night"
+                  items={coupleFavorites}
+                  likedIds={likedIds}
+                  onOpenDetails={handleOpenMediaDetail}
+                  onStartWatching={handleStartWatching}
+                  onToggleWatchlist={handleToggleWatchlist}
+                  onStartCoupleParty={(item) => {
+                    setSelectedMedia(item);
+                    setActiveRoomMode('couple');
+                    navigateToTab('couple-room', '/room/couple/LOVE-2026');
+                  }}
+                  onStartGroupParty={(item) => {
+                    setSelectedMedia(item);
+                    setActiveRoomMode('group');
+                    navigateToTab('group-room', '/room/group/CLUB-4096');
+                  }}
+                  onViewAll={() => navigateToTab('couple-room', '/room/couple/LOVE-2026')}
+                />
+
+                {/* 18. Group Watch Party Picks */}
+                <HorizontalPosterCarousel
+                  title="Group Watch Party Picks 🎉"
+                  subtitle="High-energy crowd favorites for 3–20 friends with live voting and chat"
+                  icon={<Users className="w-5 h-5 text-indigo-400" />}
+                  badge="🎉 Party Room"
+                  items={groupNightFavorites}
+                  likedIds={likedIds}
+                  onOpenDetails={handleOpenMediaDetail}
+                  onStartWatching={handleStartWatching}
+                  onToggleWatchlist={handleToggleWatchlist}
+                  onStartCoupleParty={(item) => {
+                    setSelectedMedia(item);
+                    setActiveRoomMode('couple');
+                    navigateToTab('couple-room', '/room/couple/LOVE-2026');
+                  }}
+                  onStartGroupParty={(item) => {
+                    setSelectedMedia(item);
+                    setActiveRoomMode('group');
+                    navigateToTab('group-room', '/room/group/CLUB-4096');
+                  }}
+                  onViewAll={() => navigateToTab('group-room', '/room/group/CLUB-4096')}
+                />
+              </div>
+            )}
+
+            {/* DEEP-DIVE CATEGORY BROWSING & LIVE SEARCH RESULTS */}
+            {(activeTab !== 'home' || Boolean(searchQuery.trim())) && (
+              <div className="space-y-6">
+                {/* Category, Genre, Year, Language & Sort Filter Bar */}
+                <section aria-label="Catalog Filter Controls" className="space-y-3">
               <div className="flex flex-wrap items-center justify-between gap-3">
                 <div
                   className="flex items-center gap-1 p-1 bg-slate-900 border border-slate-800 rounded-xl"
@@ -1146,10 +1970,13 @@ export default function App() {
                       onClick={() => {
                         setCategoryFilter(cat.id);
                         setCatalogPage(1);
+                        if (cat.id === 'movie') setActiveTab('movies');
+                        else if (cat.id === 'tv') setActiveTab('tv');
+                        else if (cat.id === 'anime') setActiveTab('anime');
                       }}
                       className={`px-3 py-1.5 text-xs font-medium rounded-lg transition-colors whitespace-nowrap shrink-0 ${
                         categoryFilter === cat.id
-                          ? 'bg-violet-600 text-white font-semibold'
+                          ? 'bg-violet-600 text-white font-semibold shadow'
                           : 'text-slate-400 hover:text-white'
                       }`}
                     >
@@ -1225,6 +2052,40 @@ export default function App() {
                   </select>
                 </div>
               </div>
+
+              {/* Active Filter Chips */}
+              {(genreFilter !== 'All Genres' ||
+                yearFilter !== 'All Years' ||
+                languageFilter !== 'All Languages' ||
+                Boolean(searchQuery)) && (
+                <div className="flex flex-wrap items-center gap-1.5 pt-1">
+                  <span className="text-[11px] text-slate-400 font-medium mr-1">Active Filters:</span>
+                  {searchQuery && (
+                    <span className="inline-flex items-center gap-1 px-2.5 py-0.5 rounded-full bg-violet-500/20 text-violet-300 border border-violet-500/30 text-[11px]">
+                      Query: &ldquo;{searchQuery}&rdquo;
+                      <button type="button" onClick={() => setSearchQuery('')} aria-label="Clear search query" className="hover:text-white font-bold ml-1">×</button>
+                    </span>
+                  )}
+                  {genreFilter !== 'All Genres' && (
+                    <span className="inline-flex items-center gap-1 px-2.5 py-0.5 rounded-full bg-violet-500/20 text-violet-300 border border-violet-500/30 text-[11px]">
+                      Genre: {genreFilter}
+                      <button type="button" onClick={() => setGenreFilter('All Genres')} aria-label="Clear genre filter" className="hover:text-white font-bold ml-1">×</button>
+                    </span>
+                  )}
+                  {yearFilter !== 'All Years' && (
+                    <span className="inline-flex items-center gap-1 px-2.5 py-0.5 rounded-full bg-violet-500/20 text-violet-300 border border-violet-500/30 text-[11px]">
+                      Year: {yearFilter}
+                      <button type="button" onClick={() => setYearFilter('All Years')} aria-label="Clear year filter" className="hover:text-white font-bold ml-1">×</button>
+                    </span>
+                  )}
+                  {languageFilter !== 'All Languages' && (
+                    <span className="inline-flex items-center gap-1 px-2.5 py-0.5 rounded-full bg-violet-500/20 text-violet-300 border border-violet-500/30 text-[11px]">
+                      Language: {languageFilter}
+                      <button type="button" onClick={() => setLanguageFilter('All Languages')} aria-label="Clear language filter" className="hover:text-white font-bold ml-1">×</button>
+                    </span>
+                  )}
+                </div>
+              )}
             </section>
 
             {/* Row 1: Dynamic Catalog & Search Results Grid */}
@@ -1254,22 +2115,13 @@ export default function App() {
                 </div>
                 <div className="flex items-center gap-2">
                   {(searchQuery ||
-                    categoryFilter !== 'all' ||
                     genreFilter !== 'All Genres' ||
                     yearFilter !== 'All Years' ||
                     languageFilter !== 'All Languages') && (
                     <button
                       type="button"
-                      onClick={() => {
-                        setSearchQuery('');
-                        setCategoryFilter('all');
-                        setPlatformFilter('All Platforms');
-                        setGenreFilter('All Genres');
-                        setYearFilter('All Years');
-                        setLanguageFilter('All Languages');
-                        setCatalogPage(1);
-                      }}
-                      className="px-3 py-1.5 rounded-lg bg-slate-900 border border-slate-800 text-xs text-violet-300 hover:text-white"
+                      onClick={handleResetFilters}
+                      className="px-3 py-1.5 rounded-lg bg-slate-900 border border-slate-800 text-xs text-violet-300 hover:text-white transition-colors"
                     >
                       Reset Filters
                     </button>
@@ -1278,25 +2130,40 @@ export default function App() {
               </div>
 
               {filteredCatalog.length === 0 ? (
-                <div className="p-10 text-center bg-slate-900/80 border border-slate-800 rounded-2xl space-y-3">
-                  <p className="text-sm font-medium text-slate-200">
-                    No titles matched your current filters.
-                  </p>
-                  <button
-                    type="button"
-                    onClick={() => {
-                      setSearchQuery('');
-                      setCategoryFilter('all');
-                      setPlatformFilter('All Platforms');
-                      setGenreFilter('All Genres');
-                      setYearFilter('All Years');
-                      setLanguageFilter('All Languages');
-                      setCatalogPage(1);
-                    }}
-                    className="px-4 py-2 text-xs font-semibold bg-violet-600 text-white rounded-xl"
-                  >
-                    Reset All Filters
-                  </button>
+                <div className="p-12 text-center bg-slate-900/80 border border-slate-800 rounded-3xl space-y-4">
+                  <div className="w-12 h-12 mx-auto rounded-2xl bg-violet-500/10 border border-violet-500/20 flex items-center justify-center text-violet-400">
+                    <Search className="w-6 h-6" />
+                  </div>
+                  <div className="space-y-1.5 max-w-md mx-auto">
+                    <h3 className="text-base font-display font-bold text-white">
+                      No matching titles found
+                    </h3>
+                    <p className="text-xs text-slate-400 leading-relaxed">
+                      {searchQuery
+                        ? `We couldn't find any titles matching "${searchQuery}" with the current filters.`
+                        : 'No titles match your selected filters. Try broadening your criteria or resetting filters.'}
+                    </p>
+                  </div>
+                  <div className="flex flex-wrap items-center justify-center gap-2 pt-2">
+                    <button
+                      type="button"
+                      onClick={handleResetFilters}
+                      className="px-4 py-2 text-xs font-semibold bg-violet-600 hover:bg-violet-500 text-white rounded-xl transition-colors shadow-md"
+                    >
+                      Reset All Filters
+                    </button>
+                    <button
+                      type="button"
+                      onClick={() => {
+                        setSearchQuery('');
+                        setCategoryFilter('all');
+                        setActiveTab('home');
+                      }}
+                      className="px-4 py-2 text-xs font-semibold bg-slate-800 hover:bg-slate-700 text-slate-200 rounded-xl transition-colors"
+                    >
+                      Return to Home
+                    </button>
+                  </div>
                 </div>
               ) : (
                 <>
@@ -1427,7 +2294,7 @@ export default function App() {
                       {catalogLoadingMore ? (
                         <div className="inline-flex items-center gap-2 px-6 py-3 rounded-2xl bg-slate-900 border border-violet-500/40 text-xs sm:text-sm font-semibold text-violet-300">
                           <RefreshCw className="w-4 h-4 animate-spin text-violet-400" />
-                          <span>Loading more live titles from TMDB &amp; Nxsha...</span>
+                          <span>Loading more live titles from Nxsha catalog...</span>
                         </div>
                       ) : (
                         <button
@@ -1454,473 +2321,8 @@ export default function App() {
                 </>
               )}
             </section>
-
-            {/* Row 2: Continue Watching */}
-            {activeTab === 'home' && watchHistory.length > 0 && (
-              <section aria-label="Continue Watching" className="space-y-4">
-                <div>
-                  <h2 className="text-xl font-display font-bold text-white">
-                    Continue Watching
-                  </h2>
-                  <p className="text-xs text-slate-400">
-                    Pick up right where you or your watch room left off
-                  </p>
-                </div>
-                <div className="grid grid-cols-1 sm:grid-cols-3 gap-4">
-                  {watchHistory.slice(0, 3).map((entry) => {
-                    const media = catalog.find((c) => c.id === entry.mediaId) || catalog[0];
-                    const pct = Math.min(
-                      100,
-                      Math.round((entry.progressSeconds / (entry.durationSeconds || 3600)) * 100)
-                    );
-                    return (
-                      <div
-                        key={entry.mediaId}
-                        className="p-4 rounded-2xl bg-slate-900/90 border border-slate-800 flex flex-col justify-between space-y-3"
-                      >
-                        <div className="flex items-center justify-between text-xs text-slate-400">
-                          <span className="font-semibold text-white">{media.title}</span>
-                          <span className="font-mono text-violet-300">{pct}%</span>
-                        </div>
-                        <div className="w-full h-1.5 bg-slate-800 rounded-full overflow-hidden">
-                          <div
-                            style={{ width: `${pct}%` }}
-                            className="h-full bg-gradient-to-r from-violet-500 to-rose-500"
-                          />
-                        </div>
-                        <div className="flex items-center justify-between pt-1">
-                          <span className="text-[11px] text-slate-400">
-                            {entry.roomType === 'couple'
-                              ? '❤️ Couple Session'
-                              : entry.roomType === 'group'
-                              ? '🎉 Group Session'
-                              : 'Solo Stream'}
-                          </span>
-                          <button
-                            type="button"
-                            onClick={() => handleStartWatching(media)}
-                            className="text-xs font-semibold text-violet-300 hover:text-white"
-                          >
-                            Resume →
-                          </button>
-                        </div>
-                      </div>
-                    );
-                  })}
-                </div>
-              </section>
-            )}
-
-            {/* Row 2B: Official TMDB Weekly Trending Feed */}
-            {activeTab === 'home' && trendingFeed.length > 0 && (
-              <section aria-label="Trending This Week" className="space-y-4">
-                <div className="flex flex-wrap items-center justify-between gap-2">
-                  <div>
-                    <h2 className="text-xl font-display font-bold text-white flex items-center gap-2">
-                      <Flame className="w-5 h-5 text-amber-400" />
-                      <span>Trending This Week (Official TMDB)</span>
-                    </h2>
-                    <p className="text-xs text-slate-400">
-                      Live global rankings directly from TMDB API v3 · Updated hourly
-                    </p>
-                  </div>
-                  <span className="text-xs font-mono text-amber-400">🔥 TMDB Live Rank</span>
-                </div>
-
-                <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-4">
-                  {trendingFeed.slice(0, 4).map((item) => (
-                    <div
-                      key={`trending-${item.id}`}
-                      className="p-4 rounded-2xl bg-slate-900/90 border border-amber-500/20 hover:border-amber-500/40 flex flex-col justify-between space-y-3 transition-all hover:-translate-y-1 shadow-lg"
-                    >
-                      <div className="space-y-2">
-                        <div
-                          onClick={() => handleOpenMediaDetail(item)}
-                          className="relative aspect-[16/9] w-full rounded-xl overflow-hidden cursor-pointer"
-                        >
-                          <MediaPoster item={item} variant="backdrop" className="w-full h-full" />
-                          <div className="absolute top-2 left-2 px-2 py-0.5 rounded bg-slate-950/80 text-[10px] font-mono text-amber-300 uppercase">
-                            {item.mediaType}
-                          </div>
-                          <div className="absolute top-2 right-2 px-2 py-0.5 rounded bg-slate-950/80 text-[11px] font-mono text-amber-400">
-                            ★ {item.rating.toFixed(1)}
-                          </div>
-                        </div>
-                        <h3
-                          onClick={() => handleOpenMediaDetail(item)}
-                          className="text-sm font-display font-bold text-white hover:text-amber-300 cursor-pointer truncate"
-                        >
-                          {item.title}
-                        </h3>
-                        <p className="text-xs text-slate-400 line-clamp-2">{item.description}</p>
-                      </div>
-
-                      <div className="flex items-center gap-2 pt-1">
-                        <button
-                          type="button"
-                          onClick={() => handleStartWatching(item)}
-                          className="flex-1 py-1.5 px-3 rounded-xl bg-amber-500 hover:bg-amber-400 text-slate-950 text-xs font-semibold inline-flex items-center justify-center gap-1.5 transition-colors"
-                        >
-                          <Play className="w-3.5 h-3.5 fill-current" />
-                          <span>Watch</span>
-                        </button>
-                        <button
-                          type="button"
-                          title="Start Couple Watch Party"
-                          onClick={() => {
-                            setSelectedMedia(item);
-                            setActiveRoomMode('couple');
-                            navigateToTab('couple-room', '/room/couple/LOVE-2026');
-                          }}
-                          className="p-1.5 bg-rose-500/20 hover:bg-rose-500 text-rose-300 hover:text-white rounded-xl transition-colors"
-                        >
-                          <Heart className="w-3.5 h-3.5" />
-                        </button>
-                      </div>
-                    </div>
-                  ))}
-                </div>
-              </section>
-            )}
-
-            {/* Row 2C: Official TMDB Popular Movies */}
-            {activeTab === 'home' && popularMoviesFeed.length > 0 && (
-              <section aria-label="Popular Movies" className="space-y-4">
-                <div className="flex flex-wrap items-center justify-between gap-2">
-                  <div>
-                    <h2 className="text-xl font-display font-bold text-white flex items-center gap-2">
-                      <Film className="w-5 h-5 text-violet-400" />
-                      <span>Popular Movies (Official TMDB)</span>
-                    </h2>
-                    <p className="text-xs text-slate-400">
-                      Top feature films streamed worldwide with synchronized playback
-                    </p>
-                  </div>
-                  <button
-                    type="button"
-                    onClick={() => {
-                      setCategoryFilter('movie');
-                      setActiveTab('movies');
-                    }}
-                    className="text-xs font-semibold text-violet-400 hover:underline"
-                  >
-                    View All Movies →
-                  </button>
-                </div>
-
-                <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-4">
-                  {popularMoviesFeed.slice(0, 4).map((item) => (
-                    <div
-                      key={`pop-movie-${item.id}`}
-                      className="p-4 rounded-2xl bg-slate-900/90 border border-violet-500/20 hover:border-violet-500/40 flex flex-col justify-between space-y-3 transition-all hover:-translate-y-1 shadow-lg"
-                    >
-                      <div className="space-y-2">
-                        <div
-                          onClick={() => handleOpenMediaDetail(item)}
-                          className="relative aspect-[16/9] w-full rounded-xl overflow-hidden cursor-pointer"
-                        >
-                          <MediaPoster item={item} variant="backdrop" className="w-full h-full" />
-                          <div className="absolute top-2 left-2 px-2 py-0.5 rounded bg-slate-950/80 text-[10px] font-mono text-violet-300">
-                            {item.durationMinutes}m
-                          </div>
-                          <div className="absolute top-2 right-2 px-2 py-0.5 rounded bg-slate-950/80 text-[11px] font-mono text-amber-400">
-                            ★ {item.rating.toFixed(1)}
-                          </div>
-                        </div>
-                        <h3
-                          onClick={() => handleOpenMediaDetail(item)}
-                          className="text-sm font-display font-bold text-white hover:text-violet-300 cursor-pointer truncate"
-                        >
-                          {item.title}
-                        </h3>
-                        <p className="text-xs text-slate-400 line-clamp-2">{item.description}</p>
-                      </div>
-
-                      <div className="flex items-center gap-2 pt-1">
-                        <button
-                          type="button"
-                          onClick={() => handleStartWatching(item)}
-                          className="flex-1 py-1.5 px-3 rounded-xl bg-violet-600 hover:bg-violet-500 text-white text-xs font-semibold inline-flex items-center justify-center gap-1.5 transition-colors"
-                        >
-                          <Play className="w-3.5 h-3.5 fill-current" />
-                          <span>Watch</span>
-                        </button>
-                        <button
-                          type="button"
-                          title="Start Group Watch Party"
-                          onClick={() => {
-                            setSelectedMedia(item);
-                            setActiveRoomMode('group');
-                            navigateToTab('group-room', '/room/group/CLUB-4096');
-                          }}
-                          className="p-1.5 bg-indigo-500/20 hover:bg-indigo-600 text-indigo-300 hover:text-white rounded-xl transition-colors"
-                        >
-                          <Users className="w-3.5 h-3.5" />
-                        </button>
-                      </div>
-                    </div>
-                  ))}
-                </div>
-              </section>
-            )}
-
-            {/* Row 2D: Official TMDB Popular TV Series */}
-            {activeTab === 'home' && popularTvFeed.length > 0 && (
-              <section aria-label="Popular TV Shows" className="space-y-4">
-                <div className="flex flex-wrap items-center justify-between gap-2">
-                  <div>
-                    <h2 className="text-xl font-display font-bold text-white flex items-center gap-2">
-                      <Tv className="w-5 h-5 text-pink-400" />
-                      <span>Popular TV Series (Official TMDB)</span>
-                    </h2>
-                    <p className="text-xs text-slate-400">
-                      Bingeable multi-season series with episodic stream resolvers
-                    </p>
-                  </div>
-                  <button
-                    type="button"
-                    onClick={() => {
-                      setCategoryFilter('tv');
-                      setActiveTab('tv');
-                    }}
-                    className="text-xs font-semibold text-pink-400 hover:underline"
-                  >
-                    View All TV Series →
-                  </button>
-                </div>
-
-                <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-4">
-                  {popularTvFeed.slice(0, 4).map((item) => (
-                    <div
-                      key={`pop-tv-${item.id}`}
-                      className="p-4 rounded-2xl bg-slate-900/90 border border-pink-500/20 hover:border-pink-500/40 flex flex-col justify-between space-y-3 transition-all hover:-translate-y-1 shadow-lg"
-                    >
-                      <div className="space-y-2">
-                        <div
-                          onClick={() => handleOpenMediaDetail(item)}
-                          className="relative aspect-[16/9] w-full rounded-xl overflow-hidden cursor-pointer"
-                        >
-                          <MediaPoster item={item} variant="backdrop" className="w-full h-full" />
-                          <div className="absolute top-2 left-2 px-2 py-0.5 rounded bg-slate-950/80 text-[10px] font-mono text-pink-300">
-                            {item.seasons || 1} Seasons
-                          </div>
-                          <div className="absolute top-2 right-2 px-2 py-0.5 rounded bg-slate-950/80 text-[11px] font-mono text-amber-400">
-                            ★ {item.rating.toFixed(1)}
-                          </div>
-                        </div>
-                        <h3
-                          onClick={() => handleOpenMediaDetail(item)}
-                          className="text-sm font-display font-bold text-white hover:text-pink-300 cursor-pointer truncate"
-                        >
-                          {item.title}
-                        </h3>
-                        <p className="text-xs text-slate-400 line-clamp-2">{item.description}</p>
-                      </div>
-
-                      <div className="flex items-center gap-2 pt-1">
-                        <button
-                          type="button"
-                          onClick={() => handleOpenMediaDetail(item)}
-                          className="flex-1 py-1.5 px-3 rounded-xl bg-pink-600 hover:bg-pink-500 text-white text-xs font-semibold inline-flex items-center justify-center gap-1.5 transition-colors"
-                        >
-                          <span>Explore Episodes</span>
-                        </button>
-                        <button
-                          type="button"
-                          title="Start Couple Watch Party"
-                          onClick={() => {
-                            setSelectedMedia(item);
-                            setActiveRoomMode('couple');
-                            navigateToTab('couple-room', '/room/couple/LOVE-2026');
-                          }}
-                          className="p-1.5 bg-rose-500/20 hover:bg-rose-500 text-rose-300 hover:text-white rounded-xl transition-colors"
-                        >
-                          <Heart className="w-3.5 h-3.5" />
-                        </button>
-                      </div>
-                    </div>
-                  ))}
-                </div>
-              </section>
-            )}
-
-            {/* Row 3: Couple Night Recommendations ❤️ */}
-            {activeTab === 'home' && (
-              <section aria-label="Couple Night Recommendations" className="space-y-4">
-                <div className="flex flex-wrap items-center justify-between gap-2">
-                  <div>
-                    <h2 className="text-xl font-display font-bold text-white">
-                      Couple Night Recommendations ❤️
-                    </h2>
-                    <p className="text-xs text-slate-400">
-                      Curated for two participants with Rose Nebula ambiance and synchronized hearts
-                    </p>
-                  </div>
-                  <button
-                    type="button"
-                    onClick={() => navigateToTab('couple-room', '/room/couple/LOVE-2026')}
-                    className="text-xs font-semibold text-rose-400 hover:underline"
-                  >
-                    Enter Couple Cinema →
-                  </button>
-                </div>
-
-                <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-4">
-                  {coupleFavorites.map((item) => (
-                    <div
-                      key={item.id}
-                      className="p-4 rounded-2xl bg-gradient-to-br from-rose-950/35 via-slate-900 to-slate-950 border border-rose-500/25 flex flex-col justify-between space-y-3"
-                    >
-                      <div className="space-y-1.5">
-                        <div className="text-xs font-mono text-rose-300">
-                          ❤️ {item.coupleScore}% Couple Match · {item.genres[0]}
-                        </div>
-                        <h3 className="text-base font-display font-bold text-white">
-                          {item.title}
-                        </h3>
-                        <p className="text-xs text-slate-400 line-clamp-2">{item.description}</p>
-                      </div>
-                      <button
-                        type="button"
-                        onClick={() => {
-                          setSelectedMedia(item);
-                          setActiveRoomMode('couple');
-                          navigateToTab('couple-room', '/room/couple/LOVE-2026');
-                        }}
-                        className="w-full inline-flex items-center justify-center gap-1.5 py-2 px-3 text-xs font-semibold bg-gradient-to-r from-rose-500 to-pink-600 hover:from-rose-400 hover:to-pink-500 text-white rounded-xl transition-all"
-                      >
-                        <Heart className="w-3.5 h-3.5 fill-current" />
-                        <span>Start Couple Room</span>
-                      </button>
-                    </div>
-                  ))}
-                </div>
-              </section>
-            )}
-
-            {/* Row 4: Group Movie Night Recommendations 🎉 */}
-            {activeTab === 'home' && (
-              <section aria-label="Group Movie Night Recommendations" className="space-y-4">
-                <div className="flex flex-wrap items-center justify-between gap-2">
-                  <div>
-                    <h2 className="text-xl font-display font-bold text-white">
-                      Group Movie Night Picks 🎉
-                    </h2>
-                    <p className="text-xs text-slate-400">
-                      High-energy crowd-pleasers for 3–20 friends with live reactions and voting
-                    </p>
-                  </div>
-                  <button
-                    type="button"
-                    onClick={() => navigateToTab('group-room', '/room/group/CLUB-4096')}
-                    className="text-xs font-semibold text-violet-400 hover:underline"
-                  >
-                    Enter Group Cinema →
-                  </button>
-                </div>
-
-                <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-4">
-                  {groupNightFavorites.map((item) => (
-                    <div
-                      key={item.id}
-                      className="p-4 rounded-2xl bg-gradient-to-br from-violet-950/35 via-slate-900 to-slate-950 border border-violet-500/25 flex flex-col justify-between space-y-3"
-                    >
-                      <div className="space-y-1.5">
-                        <div className="text-xs font-mono text-violet-300">
-                          🎉 {item.groupNightScore || 94}% Crowd Score · {item.genres[0]}
-                        </div>
-                        <h3 className="text-base font-display font-bold text-white">
-                          {item.title}
-                        </h3>
-                        <p className="text-xs text-slate-400 line-clamp-2">{item.description}</p>
-                      </div>
-                      <button
-                        type="button"
-                        onClick={() => {
-                          setSelectedMedia(item);
-                          setActiveRoomMode('group');
-                          navigateToTab('group-room', '/room/group/CLUB-4096');
-                        }}
-                        className="w-full inline-flex items-center justify-center gap-1.5 py-2 px-3 text-xs font-semibold bg-gradient-to-r from-violet-600 to-indigo-600 hover:from-violet-500 hover:to-indigo-500 text-white rounded-xl transition-all"
-                      >
-                        <Users className="w-3.5 h-3.5" />
-                        <span>Start Group Room</span>
-                      </button>
-                    </div>
-                  ))}
-                </div>
-              </section>
-            )}
-
-            {/* Row 5: Popular This Week & Recently Added */}
-            {activeTab === 'home' && (
-              <div className="grid grid-cols-1 lg:grid-cols-2 gap-6">
-                <div className="p-5 rounded-2xl bg-slate-900/80 border border-slate-800 space-y-3">
-                  <h3 className="text-base font-display font-bold text-white flex items-center gap-2">
-                    <Flame className="w-4 h-4 text-amber-400" />
-                    <span>Popular This Week</span>
-                  </h3>
-                  <div className="space-y-2">
-                    {popularThisWeek.map((item, idx) => (
-                      <div
-                        key={item.id}
-                        className="p-2.5 rounded-xl bg-slate-950 border border-slate-800/80 flex items-center justify-between gap-3"
-                      >
-                        <div className="flex items-center gap-3 min-w-0">
-                          <span className="text-xs font-mono text-violet-400 font-bold">
-                            #{idx + 1}
-                          </span>
-                          <div className="min-w-0">
-                            <div className="text-xs font-semibold text-white truncate">
-                              {item.title}
-                            </div>
-                            <div className="text-[11px] text-slate-400">
-                              {item.platform} · ★ {item.rating}
-                            </div>
-                          </div>
-                        </div>
-                        <button
-                          type="button"
-                          onClick={() => handleOpenMediaDetail(item)}
-                          className="px-2.5 py-1 rounded-lg bg-slate-800 hover:bg-slate-700 text-xs text-slate-200 shrink-0"
-                        >
-                          View
-                        </button>
-                      </div>
-                    ))}
-                  </div>
-                </div>
-
-                <div className="p-5 rounded-2xl bg-slate-900/80 border border-slate-800 space-y-3">
-                  <h3 className="text-base font-display font-bold text-white flex items-center gap-2">
-                    <Sparkles className="w-4 h-4 text-violet-400" />
-                    <span>Recently Added &amp; Recommended For You</span>
-                  </h3>
-                  <div className="space-y-2">
-                    {recommendations.slice(0, 4).map((rec) => (
-                      <div
-                        key={rec.item.id}
-                        className="p-2.5 rounded-xl bg-slate-950 border border-slate-800/80 flex items-center justify-between gap-3"
-                      >
-                        <div className="min-w-0">
-                          <div className="text-xs font-semibold text-white truncate">
-                            {rec.item.title}
-                          </div>
-                          <div className="text-[11px] text-violet-300 truncate">{rec.reason}</div>
-                        </div>
-                        <button
-                          type="button"
-                          onClick={() => handleStartWatching(rec.item)}
-                          className="px-2.5 py-1 rounded-lg bg-violet-600/30 hover:bg-violet-600 text-xs text-violet-100 shrink-0"
-                        >
-                          Watch
-                        </button>
-                      </div>
-                    ))}
-                  </div>
-                </div>
-              </div>
-            )}
+          </div>
+        )}
           </div>
         )}
 
@@ -2083,6 +2485,8 @@ export default function App() {
           <ProfileAndAuthView
             userProfile={userProfile}
             watchlistItems={myWatchlistItems}
+            securitySettings={securitySettings}
+            onUpdateSecurity={setSecuritySettings}
             onUpdateProfile={(next) => {
               setUserProfile(next);
               try {
@@ -2092,6 +2496,7 @@ export default function App() {
               }
             }}
             onSelectMedia={handleOpenMediaDetail}
+            onNavigateToTab={navigateToTab}
           />
         )}
 
@@ -2163,7 +2568,7 @@ export default function App() {
           <button
             type="button"
             onClick={() => navigateToTab('create-party', '/create-party')}
-            className="hover:text-white"
+            className="hover:text-white transition-colors"
           >
             Create Watch Party
           </button>
@@ -2171,7 +2576,7 @@ export default function App() {
           <button
             type="button"
             onClick={() => navigateToTab('couple-room', '/room/couple/LOVE-2026')}
-            className="hover:text-white"
+            className="hover:text-white transition-colors"
           >
             Couple Cinema ❤️
           </button>
@@ -2179,17 +2584,41 @@ export default function App() {
           <button
             type="button"
             onClick={() => navigateToTab('group-room', '/room/group/CLUB-4096')}
-            className="hover:text-white"
+            className="hover:text-white transition-colors"
           >
             Group Cinema 🎉
           </button>
           <span>·</span>
           <button
             type="button"
+            onClick={() => navigateToTab('ai-voice', '/ai-voice')}
+            className="hover:text-white transition-colors text-violet-300"
+          >
+            AI Concierge ✦
+          </button>
+          <span>·</span>
+          <button
+            type="button"
+            onClick={() => navigateToTab('offline-social', '/vault')}
+            className="hover:text-white transition-colors"
+          >
+            Offline Vault
+          </button>
+          <span>·</span>
+          <button
+            type="button"
             onClick={() => navigateToTab('my-list', '/watchlist')}
-            className="hover:text-white"
+            className="hover:text-white transition-colors"
           >
             My List ({likedIds.length})
+          </button>
+          <span>·</span>
+          <button
+            type="button"
+            onClick={() => navigateToTab('profile', '/profile')}
+            className="hover:text-white transition-colors"
+          >
+            Profile &amp; Settings
           </button>
         </div>
       </footer>
@@ -2197,13 +2626,13 @@ export default function App() {
       {/* Mobile Bottom Navigation Bar (<1024px) */}
       <nav
         aria-label="Mobile Bottom Navigation"
-        className="lg:hidden fixed bottom-0 left-0 right-0 z-40 bg-slate-950/95 backdrop-blur-md border-t border-slate-800 grid grid-cols-5 items-center h-14 px-1"
+        className="lg:hidden fixed bottom-0 left-0 right-0 z-40 bg-slate-950/95 backdrop-blur-md border-t border-slate-800 grid grid-cols-7 items-center h-14 px-1"
       >
         <button
           type="button"
           onClick={() => navigateToTab('home', '/')}
-          className={`min-h-[44px] flex flex-col items-center justify-center text-[10px] font-medium ${
-            activeTab === 'home' ? 'text-violet-400' : 'text-slate-400'
+          className={`min-h-[44px] flex flex-col items-center justify-center text-[9px] font-medium transition-colors ${
+            activeTab === 'home' ? 'text-violet-400 font-semibold' : 'text-slate-400 hover:text-white'
           }`}
         >
           <Compass className="w-4 h-4 mb-0.5" />
@@ -2211,43 +2640,71 @@ export default function App() {
         </button>
         <button
           type="button"
+          onClick={() => {
+            setCategoryFilter('movie');
+            navigateToTab('movies', '/movies');
+          }}
+          className={`min-h-[44px] flex flex-col items-center justify-center text-[9px] font-medium transition-colors ${
+            activeTab === 'movies' ? 'text-violet-400 font-semibold' : 'text-slate-400 hover:text-white'
+          }`}
+        >
+          <Film className="w-4 h-4 mb-0.5" />
+          <span>Movies</span>
+        </button>
+        <button
+          type="button"
+          onClick={() => {
+            setCategoryFilter('tv');
+            navigateToTab('tv', '/tv');
+          }}
+          className={`min-h-[44px] flex flex-col items-center justify-center text-[9px] font-medium transition-colors ${
+            activeTab === 'tv' ? 'text-violet-400 font-semibold' : 'text-slate-400 hover:text-white'
+          }`}
+        >
+          <Tv className="w-4 h-4 mb-0.5" />
+          <span>TV</span>
+        </button>
+        <button
+          type="button"
           onClick={() => navigateToTab('create-party', '/create-party')}
-          className={`min-h-[44px] flex flex-col items-center justify-center text-[10px] font-medium ${
-            activeTab === 'create-party' ? 'text-violet-400' : 'text-slate-400'
+          className={`min-h-[44px] flex flex-col items-center justify-center text-[9px] font-medium transition-colors ${
+            activeTab === 'create-party' || activeTab === 'couple-room' || activeTab === 'group-room'
+              ? 'text-violet-400 font-semibold'
+              : 'text-slate-400 hover:text-white'
           }`}
         >
           <Sparkles className="w-4 h-4 mb-0.5" />
-          <span>Create</span>
+          <span>Party</span>
         </button>
         <button
           type="button"
-          onClick={() => navigateToTab('couple-room', '/room/couple/LOVE-2026')}
-          className={`min-h-[44px] flex flex-col items-center justify-center text-[10px] font-medium ${
-            activeTab === 'couple-room' ? 'text-rose-400' : 'text-slate-400'
+          onClick={() => navigateToTab('ai-voice', '/ai-voice')}
+          className={`min-h-[44px] flex flex-col items-center justify-center text-[9px] font-medium transition-colors ${
+            activeTab === 'ai-voice' ? 'text-violet-400 font-semibold' : 'text-slate-400 hover:text-white'
           }`}
         >
-          <Heart className="w-4 h-4 mb-0.5" />
-          <span>Couple</span>
-        </button>
-        <button
-          type="button"
-          onClick={() => navigateToTab('group-room', '/room/group/CLUB-4096')}
-          className={`min-h-[44px] flex flex-col items-center justify-center text-[10px] font-medium ${
-            activeTab === 'group-room' ? 'text-violet-400' : 'text-slate-400'
-          }`}
-        >
-          <Users className="w-4 h-4 mb-0.5" />
-          <span>Group</span>
+          <BrainCircuit className="w-4 h-4 mb-0.5 text-fuchsia-400" />
+          <span>AI</span>
         </button>
         <button
           type="button"
           onClick={() => navigateToTab('my-list', '/watchlist')}
-          className={`min-h-[44px] flex flex-col items-center justify-center text-[10px] font-medium ${
-            activeTab === 'my-list' ? 'text-violet-400' : 'text-slate-400'
+          className={`min-h-[44px] flex flex-col items-center justify-center text-[9px] font-medium transition-colors ${
+            activeTab === 'my-list' ? 'text-violet-400 font-semibold' : 'text-slate-400 hover:text-white'
           }`}
         >
           <Bookmark className="w-4 h-4 mb-0.5" />
-          <span>My List</span>
+          <span>List ({likedIds.length})</span>
+        </button>
+        <button
+          type="button"
+          onClick={() => navigateToTab('profile', '/profile')}
+          className={`min-h-[44px] flex flex-col items-center justify-center text-[9px] font-medium transition-colors ${
+            activeTab === 'profile' || activeTab === 'offline-social' ? 'text-violet-400 font-semibold' : 'text-slate-400 hover:text-white'
+          }`}
+        >
+          <User className="w-4 h-4 mb-0.5" />
+          <span>Profile</span>
         </button>
       </nav>
     </div>

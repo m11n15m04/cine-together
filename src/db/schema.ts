@@ -4,9 +4,11 @@ import {
   doublePrecision,
   index,
   integer,
+  jsonb,
   pgTable,
   text,
   timestamp,
+  uniqueIndex,
   uuid,
 } from 'drizzle-orm/pg-core';
 
@@ -20,6 +22,7 @@ export const profiles = pgTable(
     displayName: text('display_name').notNull(),
     avatarUrl: text('avatar_url'),
     preferredTheme: text('preferred_theme').default('midnight-violet').notNull(),
+    preferences: jsonb('preferences').$type<Record<string, unknown>>().default({}).notNull(),
     createdAt: timestamp('created_at').defaultNow().notNull(),
     updatedAt: timestamp('updated_at').defaultNow().notNull(),
   },
@@ -49,6 +52,19 @@ export const mediaItems = pgTable(
   (table) => [index('media_items_type_idx').on(table.mediaType)]
 );
 
+// Separate cache for metadata retrieved through an authorized Nxsha catalog API.
+// Catalog refreshes never overwrite legacy media or user records.
+export const nxshaCatalogCache = pgTable(
+  'nxsha_catalog_cache',
+  {
+    cacheKey: text('cache_key').primaryKey(),
+    payload: jsonb('payload').notNull(),
+    refreshedAt: timestamp('refreshed_at').defaultNow().notNull(),
+    expiresAt: timestamp('expires_at').notNull(),
+  },
+  (table) => [index('nxsha_catalog_cache_expires_idx').on(table.expiresAt)]
+);
+
 // 3. watch_rooms
 export const watchRooms = pgTable(
   'watch_rooms',
@@ -67,7 +83,9 @@ export const watchRooms = pgTable(
     passwordHash: text('password_hash'),
     maxParticipants: integer('max_participants').default(2).notNull(),
     collaborativeControls: boolean('collaborative_controls').default(false).notNull(),
+    isLocked: boolean('is_locked').default(false).notNull(),
     roomTheme: text('room_theme').default('rose-nebula').notNull(),
+    couplePartnerNote: text('couple_partner_note').default('').notNull(),
     status: text('status').default('waiting').notNull(), // waiting | joined | selecting | ready | playing | paused | ended
     createdAt: timestamp('created_at').defaultNow().notNull(),
     expiresAt: timestamp('expires_at'),
@@ -89,7 +107,7 @@ export const watchlists = pgTable(
     isShared: boolean('is_shared').default(false).notNull(),
     createdAt: timestamp('created_at').defaultNow().notNull(),
   },
-  (table) => [index('watchlists_user_idx').on(table.userId)]
+  (table) => [uniqueIndex('watchlists_user_unique').on(table.userId)]
 );
 
 // 5. watchlist_items
@@ -108,6 +126,7 @@ export const watchlistItems = pgTable(
     addedAt: timestamp('added_at').defaultNow().notNull(),
   },
   (table) => [
+    uniqueIndex('watchlist_items_user_media_unique').on(table.userId, table.mediaId),
     index('watchlist_items_user_idx').on(table.userId),
     index('watchlist_items_media_idx').on(table.mediaId),
   ]
@@ -127,8 +146,11 @@ export const roomMembers = pgTable(
     role: text('role').default('member').notNull(), // 'host' | 'moderator' | 'partner' | 'member'
     isOnline: boolean('is_online').default(true).notNull(),
     joinedAt: timestamp('joined_at').defaultNow().notNull(),
+    leftAt: timestamp('left_at'),
+    isBanned: boolean('is_banned').default(false).notNull(),
   },
   (table) => [
+    uniqueIndex('room_members_room_user_unique').on(table.roomId, table.userId),
     index('room_members_room_idx').on(table.roomId),
     index('room_members_user_idx').on(table.userId),
   ]
@@ -170,7 +192,7 @@ export const chatMessages = pgTable(
     videoTimestampSeconds: integer('video_timestamp_seconds').default(0).notNull(),
     createdAt: timestamp('created_at').defaultNow().notNull(),
   },
-  (table) => [index('chat_messages_room_idx').on(table.roomId)]
+  (table) => [index('chat_messages_room_created_idx').on(table.roomId, table.createdAt)]
 );
 
 // 9. room_reactions
@@ -203,7 +225,10 @@ export const roomVotes = pgTable(
     voterName: text('voter_name').notNull(),
     createdAt: timestamp('created_at').defaultNow().notNull(),
   },
-  (table) => [index('room_votes_room_idx').on(table.roomId)]
+  (table) => [
+    uniqueIndex('room_votes_room_media_voter_unique').on(table.roomId, table.mediaId, table.voterId),
+    index('room_votes_room_idx').on(table.roomId),
+  ]
 );
 
 // 11. watch_sessions
@@ -220,9 +245,11 @@ export const watchSessions = pgTable(
     progressSeconds: integer('progress_seconds').default(0).notNull(),
     durationSeconds: integer('duration_seconds').default(7200).notNull(),
     startedAt: timestamp('started_at').defaultNow().notNull(),
+    lastWatchedAt: timestamp('last_watched_at').defaultNow().notNull(),
+    updatedAt: timestamp('updated_at').defaultNow().notNull(),
     endedAt: timestamp('ended_at'),
   },
-  (table) => [index('watch_sessions_user_idx').on(table.userId)]
+  (table) => [index('watch_sessions_user_last_watched_idx').on(table.userId, table.lastWatchedAt)]
 );
 
 // Relations

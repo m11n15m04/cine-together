@@ -1,0 +1,46 @@
+name: Backend and database checks
+
+on:
+  pull_request:
+    branches: [main]
+  push:
+    branches: [codex/backend-database]
+
+permissions:
+  contents: read
+
+jobs:
+  backend:
+    runs-on: ubuntu-latest
+    services:
+      postgres:
+        image: postgres:16
+        env:
+          POSTGRES_DB: cinetogether_test
+          POSTGRES_USER: cinetogether_test
+          POSTGRES_PASSWORD: cinetogether_test
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd "pg_isready -U cinetogether_test -d cinetogether_test"
+          --health-interval 5s
+          --health-timeout 5s
+          --health-retries 10
+    env:
+      DATABASE_URL: postgres://cinetogether_test:cinetogether_test@localhost:5432/cinetogether_test
+      TEST_DATABASE_URL: postgres://cinetogether_test:cinetogether_test@localhost:5432/cinetogether_test
+      CINETEST_DATABASE_ALLOW_WRITE: "true"
+      AUTH_TOKEN_SECRET: ci-only-secret-with-at-least-32-bytes
+      NODE_ENV: test
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version-file: .node-version
+          cache: npm
+      - run: npm ci
+      - run: npm audit --omit=dev --audit-level=moderate
+      - run: psql "$DATABASE_URL" -v ON_ERROR_STOP=1 -f tests/legacy-schema.sql
+      - run: npm run db:migrate
+      - run: npm run lint
+      - run: npm test

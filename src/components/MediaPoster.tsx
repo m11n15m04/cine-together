@@ -16,6 +16,7 @@ export const MediaPoster: React.FC<MediaPosterProps> = ({
   variant = 'poster',
   className = '',
 }) => {
+  const [imgLoaded, setImgLoaded] = useState(false);
   const [imgError, setImgError] = useState(false);
   const isBackdrop = variant === 'backdrop';
   const viewBox = isBackdrop ? '0 0 1280 720' : '0 0 480 640';
@@ -36,13 +37,21 @@ export const MediaPoster: React.FC<MediaPosterProps> = ({
       role="img"
       aria-label={`${item.title} (${item.year}) cinema artwork`}
     >
+      {/* Loading Skeleton */}
+      {imageUrl && !imgLoaded && !imgError && (
+        <div className="absolute inset-0 bg-gradient-to-br from-slate-900 via-slate-950 to-violet-950/40 animate-pulse" />
+      )}
+
       {imageUrl && !imgError ? (
         <img
           src={imageUrl}
           alt={`${item.title} (${item.year})`}
           loading="lazy"
+          onLoad={() => setImgLoaded(true)}
           onError={() => setImgError(true)}
-          className="w-full h-full object-cover block"
+          className={`w-full h-full object-cover block transition-opacity duration-300 ${
+            imgLoaded ? 'opacity-100' : 'opacity-0'
+          }`}
         />
       ) : (
         <svg
