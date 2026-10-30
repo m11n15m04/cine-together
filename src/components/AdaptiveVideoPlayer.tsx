@@ -1,7 +1,7 @@
 import React, { useEffect, useMemo, useRef, useState } from 'react';
+import Hls from 'hls.js';
 import {
   AlertCircle,
-  Check,
   Download,
   ExternalLink,
   Pause,
@@ -10,14 +10,11 @@ import {
   Share2,
   ShieldAlert,
   Sparkles,
-  Subtitles,
   Timer,
   Volume2,
   VolumeX,
-  Wifi,
 } from 'lucide-react';
 import { FloatingReaction, MediaItem, PlayerProviderType, QualityTier } from '../types';
-import { calculateAdaptiveBitrate } from '../utils/streamEngine';
 import { createMediaProviderAdapter } from '../utils/mediaAdapter';
 
 interface AdaptiveVideoPlayerProps {
@@ -30,20 +27,13 @@ interface AdaptiveVideoPlayerProps {
   floatingReactions?: FloatingReaction[];
   onEpisodeChange?: (season: number, episode: number) => void;
   onPlaybackChange?: (isPlaying: boolean, currentTimeSeconds: number) => void;
+  onPlaybackProgress?: (currentTimeSeconds: number, durationSeconds: number) => void;
   onTriggerCountdown?: () => void;
   onTriggerDownload: (item: MediaItem, quality: QualityTier) => void;
   onTriggerShare: (item: MediaItem, timestampFormatted: string) => void;
   onClose?: () => void;
   compact?: boolean;
 }
-
-const SUBTITLE_CUES = [
-  'Signal locked from CineTogether synchronized cinema relay...',
-  'Notice the rain reflections across the Kyoto temple courtyard.',
-  'Telemetry confirms chronological alignment across both screens.',
-  'Hold position—acoustic resonance approaching the main theme.',
-  'Different places. One screen. Shared moments.',
-];
 
 export const AdaptiveVideoPlayer: React.FC<AdaptiveVideoPlayerProps> = ({
   item,
@@ -55,6 +45,7 @@ export const AdaptiveVideoPlayer: React.FC<AdaptiveVideoPlayerProps> = ({
   floatingReactions = [],
   onEpisodeChange,
   onPlaybackChange,
+  onPlaybackProgress,
   onTriggerCountdown,
   onTriggerDownload,
   onTriggerShare,
@@ -64,52 +55,82 @@ export const AdaptiveVideoPlayer: React.FC<AdaptiveVideoPlayerProps> = ({
   const [providerType, setProviderType] = useState<PlayerProviderType>('synced-studio');
   const [selectedSeason, setSelectedSeason] = useState<number>(season || 1);
   const [selectedEpisode, setSelectedEpisode] = useState<number>(episode || 1);
-  const [isPlaying, setIsPlaying] = useState<boolean>(externalIsPlaying ?? true);
-  const [currentTime, setCurrentTime] = useState<number>(externalTimeSeconds ?? 142);
+  const [isPlaying, setIsPlaying] = useState<boolean>(externalIsPlaying ?? false);
+  const [currentTime, setCurrentTime] = useState<number>(externalTimeSeconds ?? 0);
   const [isMuted, setIsMuted] = useState<boolean>(true);
-  const [subtitlesOn, setSubtitlesOn] = useState<boolean>(true);
-  const [qualityPref, setQualityPref] = useState<QualityTier | 'auto'>('auto');
-  const [bandwidthMbps, setBandwidthMbps] = useState<number>(24.6);
-  const [isDataSaver, setIsDataSaver] = useState<boolean>(false);
   const [quickRecapText, setQuickRecapText] = useState<string | null>(null);
   const [recapLoading, setRecapLoading] = useState<boolean>(false);
-  const [downloadTriggered, setDownloadTriggered] = useState<boolean>(false);
   const [countdownValue, setCountdownValue] = useState<number | null>(null);
-  const [showEmbedFallbackCard, setShowEmbedFallbackCard] = useState<boolean>(false);
 
-  const canvasRef = useRef<HTMLCanvasElement | null>(null);
+  const videoRef = useRef<HTMLVideoElement | null>(null);
+  const [availability, setAvailability] = useState<{
+    available: boolean;
+    status: string;
+    sourceType?: 'mp4' | 'hls' | 'external';
+    url?: string;
+    message?: string;
+  } | null>(null);
+  const [sourceError, setSourceError] = useState<string | null>(null);
   const isPlayingRef = useRef(isPlaying);
-  const currentTimeRef = useRef(currentTime);
+  const lastPlaybackBroadcastRef = useRef(0);
+  const lastProgressSaveRef = useRef(0);
+  const playbackChangeRef = useRef(onPlaybackChange);
+  const playbackProgressRef = useRef(onPlaybackProgress);
   isPlayingRef.current = isPlaying;
-  currentTimeRef.current = currentTime;
+  playbackChangeRef.current = onPlaybackChange;
+  playbackProgressRef.current = onPlaybackProgress;
+
+  useEffect(() => {
+    let active = true;
+    setAvailability(null);
+    setSourceError(null);
+    setIsPlaying(false);
+    setCurrentTime(0);
+    const query = item.mediaType === 'movie' ? '' : `?season=${selectedSeason}&episode=${selectedEpisode}`;
+    fetch(`/api/media/availability/${encodeURIComponent(item.id)}${query}`)
+      .then(async (response) => {
+        const result = await response.json();
+        if (!response.ok) throw new Error(result.error || 'Playback availability could not be checked.');
+        if (active) setAvailability(result);
+      })
+      .catch((error) => {
+        if (active) setSourceError(error instanceof Error ? error.message : 'Playback availability could not be checked.');
+      });
+    return () => { active = false; };
+  }, [item.id, item.mediaType, selectedSeason, selectedEpisode]);
+
+  useEffect(() => {
+    if (availability?.sourceType === 'external') setProviderType('authorized-external');
+    else setProviderType('synced-studio');
+  }, [availability]);
 
   const adapter = useMemo(
     () =>
       createMediaProviderAdapter({
         providerType,
-        streamUrl: item.streamUrl,
+        streamUrl: availability?.sourceType === 'mp4' || availability?.sourceType === 'hls' ? availability.url : '',
         mediaType: item.mediaType,
         tmdbId: item.tmdbId,
         season: selectedSeason,
         episode: selectedEpisode,
         durationMinutes: item.durationMinutes,
-        openOnProviderUrl: item.nxshaWatchUrl,
+        openOnProviderUrl: availability?.sourceType === 'external' ? availability.url : '',
       }),
     [
       providerType,
-      item.streamUrl,
+      availability?.url,
+      availability?.sourceType,
       item.mediaType,
       item.tmdbId,
       selectedSeason,
       selectedEpisode,
       item.durationMinutes,
-      item.nxshaWatchUrl,
+      item.id,
     ]
   );
 
   const capabilities = adapter.getCapabilities();
-  const totalDurationSeconds = adapter.getDuration();
-  const abrDecision = calculateAdaptiveBitrate(bandwidthMbps, qualityPref, isDataSaver);
+  const totalDurationSeconds = availability?.available ? adapter.getDuration() : 0;
 
   useEffect(() => {
     if (typeof season === 'number' && season !== selectedSeason) {
@@ -120,16 +141,61 @@ export const AdaptiveVideoPlayer: React.FC<AdaptiveVideoPlayerProps> = ({
     }
   }, [season, episode]);
 
-  // Sync with authoritative Watch Party state when using Synced Studio Adapter
+  useEffect(() => {
+    const video = videoRef.current;
+    if (!video || !availability?.available || !availability.url || availability.sourceType === 'external') return;
+    let hls: Hls | null = null;
+    if (availability.sourceType === 'hls') {
+      if (video.canPlayType('application/vnd.apple.mpegurl')) video.src = availability.url;
+      else if (Hls.isSupported()) {
+        hls = new Hls({ enableWorker: true, lowLatencyMode: true });
+        hls.loadSource(availability.url);
+        hls.attachMedia(video);
+        hls.on(Hls.Events.ERROR, (_event, data) => {
+          if (data.fatal) setSourceError('The authorized HLS source could not be played.');
+        });
+      } else {
+        setSourceError('This browser cannot play the configured HLS source.');
+      }
+    } else {
+      video.src = availability.url;
+    }
+    adapter.initializePlayer(video);
+    const unsubscribe = adapter.onPlaybackEvent((event) => {
+      setCurrentTime(event.currentTimeSeconds);
+      setIsPlaying(event.type === 'play' ? true : event.type === 'pause' || event.type === 'ended' ? false : isPlayingRef.current);
+      if (event.type === 'play' || event.type === 'pause' || event.type === 'seek') {
+        playbackChangeRef.current?.(event.type === 'play' ? true : event.type === 'pause' ? false : isPlayingRef.current, event.currentTimeSeconds);
+      }
+      const now = Date.now();
+      if (event.type === 'timeupdate' && now - lastPlaybackBroadcastRef.current >= 2000) {
+        lastPlaybackBroadcastRef.current = now;
+        playbackChangeRef.current?.(isPlayingRef.current, event.currentTimeSeconds);
+      }
+      if (event.type === 'timeupdate' && now - lastProgressSaveRef.current >= 15_000) {
+        lastProgressSaveRef.current = now;
+        playbackProgressRef.current?.(event.currentTimeSeconds, event.durationSeconds);
+      }
+    });
+    return () => {
+      unsubscribe();
+      adapter.destroy();
+      hls?.destroy();
+      video.pause();
+      video.removeAttribute('src');
+      video.load();
+    };
+  }, [adapter, availability]);
+
+  // Sync with authoritative Watch Party state using the authorized HTML video element.
   useEffect(() => {
     if (
       adapter.supportsProgrammaticSync &&
       typeof externalIsPlaying === 'boolean' &&
       externalIsPlaying !== isPlaying
     ) {
-      setIsPlaying(externalIsPlaying);
       if (externalIsPlaying) {
-        adapter.play();
+        void adapter.play().catch(() => setSourceError('Playback could not start on this device.'));
       } else {
         adapter.pause();
       }
@@ -142,103 +208,9 @@ export const AdaptiveVideoPlayer: React.FC<AdaptiveVideoPlayerProps> = ({
       typeof externalTimeSeconds === 'number' &&
       Math.abs(externalTimeSeconds - currentTime) > 2.0
     ) {
-      setCurrentTime(externalTimeSeconds);
       adapter.seekTo(externalTimeSeconds);
     }
   }, [externalTimeSeconds, adapter]);
-
-  // Advance playback timer at 1Hz for UI scrubber
-  useEffect(() => {
-    if (!isPlaying || !adapter.supportsProgrammaticSync) return;
-    const interval = window.setInterval(() => {
-      setCurrentTime((prev) => {
-        const next = prev + 1 >= totalDurationSeconds ? 0 : prev + 1;
-        adapter.seekTo(next);
-        return next;
-      });
-    }, 1000);
-    return () => window.clearInterval(interval);
-  }, [isPlaying, totalDurationSeconds, adapter]);
-
-  // Render deterministic cinema frame on canvas when in Synced Studio mode
-  useEffect(() => {
-    const canvas = canvasRef.current;
-    if (!canvas || providerType !== 'synced-studio') return;
-    const ctx = canvas.getContext('2d');
-    if (!ctx) return;
-
-    let animId = 0;
-    let frameCount = 0;
-
-    const drawFrame = () => {
-      frameCount += isPlayingRef.current ? 1 : 0;
-      const t = currentTimeRef.current + (frameCount % 60) / 60;
-      const w = canvas.width;
-      const h = canvas.height;
-
-      const bgGrad = ctx.createLinearGradient(0, 0, w, h);
-      bgGrad.addColorStop(0, item.secondaryColor || '#1e1b4b');
-      bgGrad.addColorStop(0.55, '#090d16');
-      bgGrad.addColorStop(1, '#020617');
-      ctx.fillStyle = bgGrad;
-      ctx.fillRect(0, 0, w, h);
-
-      const sweepX = w * 0.5 + Math.sin(t * 0.45) * (w * 0.24);
-      const sweepY = h * 0.44 + Math.cos(t * 0.3) * (h * 0.12);
-      const glow = ctx.createRadialGradient(sweepX, sweepY, 10, sweepX, sweepY, w * 0.45);
-      glow.addColorStop(0, `${item.accentColor}66`);
-      glow.addColorStop(0.5, `${item.accentColor}1f`);
-      glow.addColorStop(1, 'transparent');
-      ctx.fillStyle = glow;
-      ctx.fillRect(0, 0, w, h);
-
-      ctx.strokeStyle = `${item.accentColor}44`;
-      ctx.lineWidth = 1.5;
-      const horizonY = h * 0.68;
-      ctx.beginPath();
-      ctx.moveTo(0, horizonY);
-      ctx.lineTo(w, horizonY);
-      ctx.stroke();
-
-      const barCount = 42;
-      const barWidth = w / (barCount * 1.8);
-      ctx.fillStyle = `${item.accentColor}88`;
-      for (let i = 0; i < barCount; i++) {
-        const x = w * 0.12 + i * (barWidth * 1.6);
-        const wave =
-          Math.abs(Math.sin(t * 1.8 + i * 0.35) * Math.cos(t * 0.7 - i * 0.2)) * (h * 0.16) + 4;
-        ctx.fillRect(x, horizonY - wave, barWidth, wave);
-      }
-
-      ctx.fillStyle = '#020617';
-      ctx.fillRect(0, 0, w, h * 0.08);
-      ctx.fillRect(0, h * 0.92, w, h * 0.08);
-
-      ctx.fillStyle = 'rgba(226, 232, 240, 0.7)';
-      ctx.font = '12px "JetBrains Mono", monospace';
-      ctx.fillText(
-        `CINETOGETHER SYNCED STREAM · ${abrDecision.selectedQuality} (${abrDecision.bitrateMbps} Mbps) · ${abrDecision.codec}`,
-        24,
-        h * 0.055
-      );
-
-      if (isPlayingRef.current) {
-        animId = window.requestAnimationFrame(drawFrame);
-      }
-    };
-
-    drawFrame();
-    return () => {
-      if (animId) window.cancelAnimationFrame(animId);
-    };
-  }, [
-    item,
-    providerType,
-    isPlaying,
-    abrDecision.selectedQuality,
-    abrDecision.bitrateMbps,
-    abrDecision.codec,
-  ]);
 
   const formatTime = (secs: number) => {
     const s = Math.max(0, Math.floor(secs));
@@ -252,18 +224,15 @@ export const AdaptiveVideoPlayer: React.FC<AdaptiveVideoPlayerProps> = ({
   };
 
   const handleTogglePlay = () => {
-    const next = !isPlaying;
-    setIsPlaying(next);
-    if (next) adapter.play();
-    else adapter.pause();
-    onPlaybackChange?.(next, currentTime);
+    if (!availability?.available || availability.sourceType === 'external') return;
+    if (isPlaying) adapter.pause();
+    else void adapter.play().catch(() => setSourceError('Playback could not start on this device.'));
   };
 
   const handleSeek = (e: React.ChangeEvent<HTMLInputElement>) => {
     const nextTime = Number(e.target.value);
     setCurrentTime(nextTime);
     adapter.seekTo(nextTime);
-    onPlaybackChange?.(isPlaying, nextTime);
   };
 
   const startManualCountdown = () => {
@@ -292,18 +261,14 @@ export const AdaptiveVideoPlayer: React.FC<AdaptiveVideoPlayerProps> = ({
         }),
       });
       const data = await resp.json();
-      setQuickRecapText(data.recap || 'Scene context synthesized.');
+      setQuickRecapText(resp.ok ? (data.recap || 'Scene context is unavailable.') : (data.error || 'Scene context is unavailable.'));
     } catch {
-      setQuickRecapText(
-        `Up to ${formatTime(currentTime)} in ${item.title}: Key narrative tensions converge without spoilers for the upcoming sequence.`
-      );
+      setQuickRecapText('Scene context is unavailable.');
     } finally {
       setRecapLoading(false);
     }
   };
 
-  const activeSubtitle = SUBTITLE_CUES[Math.floor(currentTime / 6) % SUBTITLE_CUES.length];
-  const embedUrl = adapter.getEmbedUrl();
   const providerWatchUrl = adapter.getOpenOnProviderUrl();
 
   return (
@@ -317,14 +282,18 @@ export const AdaptiveVideoPlayer: React.FC<AdaptiveVideoPlayerProps> = ({
           <span
             data-testid="playback-capability-badge"
             className={`px-2 py-0.5 rounded-md text-[11px] font-mono border ${
-              capabilities.supportsProgrammaticSync
+              availability?.available && availability.sourceType !== 'external'
                 ? 'bg-emerald-500/15 border-emerald-500/30 text-emerald-300'
                 : 'bg-amber-500/15 border-amber-500/30 text-amber-300'
             }`}
           >
-            {capabilities.supportsProgrammaticSync
-              ? 'Auto-Sync Supported'
-              : 'Manual Sync Only (External Frame)'}
+            {!availability
+              ? 'Checking playback availability'
+              : !availability.available
+              ? 'Metadata only · unavailable'
+              : availability.sourceType === 'external'
+              ? 'Authorized external · manual sync'
+              : `Authorized ${availability.sourceType?.toUpperCase()} · room sync`}
           </span>
 
           {item.mediaType !== 'movie' && (
@@ -375,51 +344,11 @@ export const AdaptiveVideoPlayer: React.FC<AdaptiveVideoPlayerProps> = ({
         </div>
 
         <div className="flex items-center gap-2 flex-wrap">
-          {/* MediaProviderAdapter Switcher */}
-          <div
-            className="flex items-center bg-slate-950 p-1 rounded-xl border border-slate-800"
-            role="group"
-            aria-label="Media Provider Adapter"
-          >
-            <button
-              type="button"
-              onClick={() => {
-                setProviderType('synced-studio');
-                setShowEmbedFallbackCard(false);
-              }}
-              className={`px-3 py-1 text-xs font-medium rounded-lg transition-colors whitespace-nowrap shrink-0 ${
-                providerType === 'synced-studio'
-                  ? 'bg-gradient-to-r from-violet-600 to-fuchsia-600 text-white font-semibold shadow-sm'
-                  : 'text-slate-400 hover:text-white'
-              }`}
-            >
-              Synced Studio Stream
-            </button>
-            <button
-              type="button"
-              onClick={() => setProviderType('nxsha-embed')}
-              disabled={isOfflineMode}
-              className={`px-3 py-1 text-xs font-medium rounded-lg transition-colors whitespace-nowrap shrink-0 ${
-                providerType === 'nxsha-embed'
-                  ? 'bg-gradient-to-r from-violet-600 to-fuchsia-600 text-white font-semibold shadow-sm'
-                  : 'text-slate-400 hover:text-white disabled:opacity-40'
-              }`}
-            >
-              External Embed (/embed)
-            </button>
-          </div>
-
-          {/* Open on Provider Fallback Link */}
-          <a
-            href={providerWatchUrl}
-            target="_blank"
-            rel="noopener noreferrer"
-            data-testid="open-on-provider-fallback"
-            className="inline-flex items-center gap-1.5 px-3 py-1.5 text-xs font-semibold text-violet-200 hover:text-white bg-violet-600/20 hover:bg-violet-600/35 border border-violet-500/30 rounded-xl transition-colors whitespace-nowrap shrink-0"
-          >
-            <span>Open on Provider</span>
-            <ExternalLink className="w-3.5 h-3.5" />
-          </a>
+          {availability?.sourceType === 'external' && providerWatchUrl && (
+            <a href={providerWatchUrl} target="_blank" rel="noopener noreferrer" data-testid="open-on-provider-fallback" className="inline-flex items-center gap-1.5 px-3 py-1.5 text-xs font-semibold text-violet-200 hover:text-white bg-violet-600/20 hover:bg-violet-600/35 border border-violet-500/30 rounded-xl transition-colors whitespace-nowrap shrink-0">
+              <span>Open authorized provider</span><ExternalLink className="w-3.5 h-3.5" />
+            </a>
+          )}
 
           {onClose && (
             <button
@@ -443,24 +372,7 @@ export const AdaptiveVideoPlayer: React.FC<AdaptiveVideoPlayerProps> = ({
             <AlertCircle className="w-4 h-4 text-amber-400 shrink-0" />
             <span>{adapter.syncLimitationNotice}</span>
           </div>
-          <div className="flex items-center gap-2 shrink-0">
-            <button
-              type="button"
-              onClick={startManualCountdown}
-              className="inline-flex items-center gap-1.5 px-3 py-1 rounded-lg bg-amber-500/20 hover:bg-amber-500/30 border border-amber-400/40 text-amber-100 font-semibold transition-colors"
-            >
-              <Timer className="w-3.5 h-3.5" />
-              <span>3-2-1 Room Countdown</span>
-            </button>
-            <button
-              type="button"
-              onClick={() => setShowEmbedFallbackCard((prev) => !prev)}
-              className="inline-flex items-center gap-1 px-2.5 py-1 rounded-lg bg-slate-900 hover:bg-slate-800 border border-slate-700 text-slate-200"
-            >
-              <ShieldAlert className="w-3.5 h-3.5 text-violet-400" />
-              <span>{showEmbedFallbackCard ? 'Show Iframe' : 'Embed Blocked?'}</span>
-            </button>
-          </div>
+          <button type="button" onClick={startManualCountdown} className="inline-flex items-center gap-1.5 px-3 py-1 rounded-lg bg-amber-500/20 hover:bg-amber-500/30 border border-amber-400/40 text-amber-100 font-semibold transition-colors"><Timer className="w-3.5 h-3.5" /><span>3-2-1 Room Countdown</span></button>
         </div>
       )}
 
@@ -470,83 +382,20 @@ export const AdaptiveVideoPlayer: React.FC<AdaptiveVideoPlayerProps> = ({
           compact ? 'aspect-video max-h-[380px]' : 'aspect-video max-h-[540px]'
         } flex items-center justify-center overflow-hidden`}
       >
-        {providerType === 'synced-studio' ? (
-          <>
-            <canvas
-              ref={canvasRef}
-              width={960}
-              height={540}
-              data-testid="adaptive-cinema-canvas"
-              onClick={handleTogglePlay}
-              className="w-full h-full object-cover cursor-pointer"
-            />
-
-            {!isPlaying && (
-              <button
-                type="button"
-                onClick={handleTogglePlay}
-                aria-label="Resume Playback"
-                className="absolute inset-0 flex items-center justify-center bg-black/40 backdrop-blur-[2px] transition-opacity"
-              >
-                <div className="w-16 h-16 rounded-full bg-gradient-to-br from-violet-500 to-fuchsia-500 text-white flex items-center justify-center shadow-xl">
-                  <Play className="w-7 h-7 fill-current ml-0.5" />
-                </div>
-              </button>
-            )}
-
-            {subtitlesOn && (
-              <div className="absolute bottom-12 left-1/2 -translate-x-1/2 px-4 py-1.5 rounded-lg bg-slate-950/85 text-slate-100 text-sm font-medium text-center max-w-xl pointer-events-none border border-slate-800/80">
-                {activeSubtitle}
-              </div>
-            )}
-          </>
-        ) : showEmbedFallbackCard ? (
-          <div className="w-full h-full p-8 bg-gradient-to-br from-slate-950 via-violet-950/30 to-slate-950 flex flex-col items-center justify-center text-center space-y-4">
-            <ShieldAlert className="w-10 h-10 text-violet-400" />
-            <div className="space-y-1 max-w-lg">
-              <h3 className="text-lg font-display font-bold text-white">
-                External Provider Fallback ({item.title})
-              </h3>
-              <p className="text-xs text-slate-300 leading-relaxed">
-                If third-party iframe embedding (`{embedUrl}`) is restricted by browser privacy or
-                X-Frame-Options policies, open the provider page directly in a new tab or switch to
-                the built-in Synced Studio Stream to keep real-time room playback synchronization.
-              </p>
-            </div>
-            <div className="flex flex-wrap items-center justify-center gap-3">
-              <a
-                href={providerWatchUrl}
-                target="_blank"
-                rel="noopener noreferrer"
-                className="inline-flex items-center gap-2 px-5 py-2.5 rounded-xl bg-white text-slate-950 font-semibold text-xs shadow-lg"
-              >
-                <span>Open on Provider ({providerWatchUrl})</span>
-                <ExternalLink className="w-4 h-4" />
-              </a>
-              <button
-                type="button"
-                onClick={() => {
-                  setProviderType('synced-studio');
-                  setShowEmbedFallbackCard(false);
-                }}
-                className="inline-flex items-center gap-2 px-5 py-2.5 rounded-xl bg-gradient-to-r from-violet-600 to-fuchsia-600 text-white font-semibold text-xs shadow-lg"
-              >
-                <Play className="w-4 h-4 fill-current" />
-                <span>Use Synced Studio Player</span>
-              </button>
-            </div>
+        {availability?.available && availability.sourceType === 'external' ? (
+          <div className="w-full h-full p-8 flex flex-col items-center justify-center text-center gap-4 bg-slate-950">
+            <ShieldAlert className="w-10 h-10 text-amber-400" />
+            <h3 className="text-lg font-display font-bold text-white">External provider playback</h3>
+            <p className="text-sm text-slate-300 max-w-lg">This authorized provider runs outside CineTogether. Playback controls and synchronization remain manual.</p>
+            {providerWatchUrl && <a href={providerWatchUrl} target="_blank" rel="noopener noreferrer" className="inline-flex items-center gap-2 px-5 py-2.5 rounded-xl bg-white text-slate-950 font-semibold text-xs">Open authorized provider <ExternalLink className="w-4 h-4" /></a>}
           </div>
+        ) : availability?.available && availability.url && (availability.sourceType === 'mp4' || availability.sourceType === 'hls') ? (
+          <video ref={videoRef} data-testid="adaptive-video" className="w-full h-full object-contain bg-black" controls playsInline muted={isMuted} preload="metadata" aria-label={`Video player for ${item.title}`} />
         ) : (
-          <div className="w-full h-full relative flex flex-col">
-            <iframe
-              src={embedUrl}
-              title={`${item.title} Embed Player`}
-              className="w-full h-full border-0 bg-slate-950"
-              sandbox="allow-scripts allow-same-origin allow-forms"
-            />
-            <div className="absolute bottom-3 right-3 bg-slate-950/90 border border-slate-800 px-3 py-1.5 rounded-lg text-xs font-mono text-slate-300 flex items-center gap-2">
-              <span>Embed: {embedUrl}</span>
-            </div>
+          <div className="w-full h-full p-8 flex flex-col items-center justify-center text-center gap-3 bg-slate-950">
+            <ShieldAlert className="w-10 h-10 text-amber-400" />
+            <h3 className="text-lg font-display font-bold text-white">Unavailable for playback</h3>
+            <p className="text-sm text-slate-300 max-w-lg">{sourceError || availability?.message || 'No authorized MP4 or HLS source is configured for this catalog item.'}</p>
           </div>
         )}
 
@@ -589,9 +438,9 @@ export const AdaptiveVideoPlayer: React.FC<AdaptiveVideoPlayerProps> = ({
             type="range"
             aria-label="Seek video timeline"
             min={0}
-            max={totalDurationSeconds}
+            max={Math.max(1, totalDurationSeconds)}
             value={currentTime}
-            disabled={!adapter.supportsProgrammaticSync}
+            disabled={!availability?.available || availability.sourceType === 'external'}
             onChange={handleSeek}
             className="flex-1 h-1.5 bg-slate-800 rounded-lg appearance-none cursor-pointer accent-violet-500 disabled:opacity-40"
           />
@@ -605,7 +454,7 @@ export const AdaptiveVideoPlayer: React.FC<AdaptiveVideoPlayerProps> = ({
             <button
               type="button"
               onClick={handleTogglePlay}
-              disabled={!adapter.supportsProgrammaticSync}
+              disabled={!availability?.available || availability.sourceType === 'external'}
               aria-label={isPlaying ? 'Pause video' : 'Play video'}
               className="inline-flex items-center gap-2 px-4 py-2 bg-gradient-to-r from-violet-600 to-fuchsia-600 hover:from-violet-500 hover:to-fuchsia-500 disabled:opacity-40 text-white font-semibold text-xs rounded-xl transition-all whitespace-nowrap shrink-0 shadow-md"
             >
@@ -624,19 +473,6 @@ export const AdaptiveVideoPlayer: React.FC<AdaptiveVideoPlayerProps> = ({
 
             <button
               type="button"
-              onClick={() => setSubtitlesOn(!subtitlesOn)}
-              aria-label="Toggle Subtitles"
-              className={`p-2 rounded-xl transition-colors ${
-                subtitlesOn
-                  ? 'bg-violet-500/20 text-violet-300 border border-violet-500/40'
-                  : 'bg-slate-800/80 text-slate-400 hover:text-white'
-              }`}
-            >
-              <Subtitles className="w-4 h-4" />
-            </button>
-
-            <button
-              type="button"
               onClick={handleRequestQuickRecap}
               disabled={recapLoading}
               className="inline-flex items-center gap-1.5 px-3 py-2 text-xs font-medium bg-slate-800 hover:bg-slate-700 text-slate-200 rounded-xl transition-colors whitespace-nowrap shrink-0"
@@ -647,68 +483,13 @@ export const AdaptiveVideoPlayer: React.FC<AdaptiveVideoPlayerProps> = ({
           </div>
 
           <div className="flex flex-wrap items-center gap-2">
-            <div className="flex items-center gap-1.5 bg-slate-950 px-2.5 py-1.5 rounded-xl border border-slate-800">
-              <Wifi className="w-3.5 h-3.5 text-violet-400" />
-              <label htmlFor={`abr-select-${item.id}`} className="sr-only">
-                Adaptive Bitrate Quality
-              </label>
-              <select
-                id={`abr-select-${item.id}`}
-                aria-label="Adaptive Bitrate Quality"
-                value={qualityPref}
-                onChange={(e) => setQualityPref(e.target.value as QualityTier | 'auto')}
-                className="bg-transparent text-xs font-mono text-slate-200 focus:outline-none cursor-pointer"
-              >
-                <option value="auto" className="bg-slate-900">
-                  Auto ABR ({abrDecision.selectedQuality})
-                </option>
-                <option value="4K UHD" className="bg-slate-900">
-                  4K UHD · 18.4 Mbps
-                </option>
-                <option value="1080p FHD" className="bg-slate-900">
-                  1080p FHD · 6.8 Mbps
-                </option>
-                <option value="720p HD" className="bg-slate-900">
-                  720p HD · 3.2 Mbps
-                </option>
-                <option value="480p Saver" className="bg-slate-900">
-                  480p Saver · 1.1 Mbps
-                </option>
-              </select>
-            </div>
-
             <button
               type="button"
-              onClick={() => setIsDataSaver(!isDataSaver)}
-              className={`px-2.5 py-1.5 text-xs font-medium rounded-xl border transition-colors whitespace-nowrap shrink-0 ${
-                isDataSaver
-                  ? 'bg-emerald-500/20 border-emerald-500/40 text-emerald-300'
-                  : 'bg-slate-950 border-slate-800 text-slate-400 hover:text-slate-200'
-              }`}
+              disabled
+              title="Offline downloads are not implemented for this backend."
+              className="inline-flex items-center gap-1.5 px-3 py-1.5 text-xs font-medium bg-slate-800 text-slate-400 rounded-xl whitespace-nowrap shrink-0 disabled:opacity-60"
             >
-              {isDataSaver ? 'Data Saver: ON' : 'Data Saver: OFF'}
-            </button>
-
-            <button
-              type="button"
-              onClick={() => {
-                onTriggerDownload(item, abrDecision.selectedQuality);
-                setDownloadTriggered(true);
-                setTimeout(() => setDownloadTriggered(false), 2500);
-              }}
-              className="inline-flex items-center gap-1.5 px-3 py-1.5 text-xs font-medium bg-slate-800 hover:bg-slate-700 text-slate-200 rounded-xl transition-colors whitespace-nowrap shrink-0"
-            >
-              {downloadTriggered ? (
-                <>
-                  <Check className="w-3.5 h-3.5 text-emerald-400" />
-                  <span>Saved Offline</span>
-                </>
-              ) : (
-                <>
-                  <Download className="w-3.5 h-3.5" />
-                  <span>Offline ({abrDecision.selectedQuality})</span>
-                </>
-              )}
+              <Download className="w-3.5 h-3.5" /><span>Offline unavailable</span>
             </button>
 
             <button
@@ -728,27 +509,8 @@ export const AdaptiveVideoPlayer: React.FC<AdaptiveVideoPlayerProps> = ({
             <span className="font-mono tabular-nums">
               {capabilities.providerLabel} ·{' '}
               {capabilities.supportsProgrammaticSync
-                ? abrDecision.reason
+                ? availability?.available ? `${availability.sourceType?.toUpperCase()} source` : 'No authorized source'
                 : 'Manual Room Coordination'}
-            </span>
-          </div>
-
-          <div className="flex items-center gap-2">
-            <label htmlFor={`bw-slider-${item.id}`} className="text-xs text-slate-400">
-              Link Speed:
-            </label>
-            <input
-              id={`bw-slider-${item.id}`}
-              type="range"
-              min={1}
-              max={40}
-              step={0.5}
-              value={bandwidthMbps}
-              onChange={(e) => setBandwidthMbps(Number(e.target.value))}
-              className="w-24 h-1 bg-slate-800 rounded-lg appearance-none cursor-pointer accent-violet-500"
-            />
-            <span className="font-mono tabular-nums text-slate-300 w-16 text-right">
-              {bandwidthMbps.toFixed(1)} Mbps
             </span>
           </div>
         </div>

@@ -1,9 +1,6 @@
 export const BRAND_CONFIG = {
   name: (typeof import.meta !== 'undefined' && import.meta.env?.VITE_APP_NAME) || 'CineTogether',
   tagline: 'Different places. One screen. Shared moments.',
-  embedBaseUrl:
-    (typeof import.meta !== 'undefined' && import.meta.env?.VITE_MEDIA_EMBED_BASE_URL) ||
-    'https://nxsha.space',
 };
 
 export type QualityTier = '4K UHD' | '1080p FHD' | '720p HD' | '480p Saver';
@@ -11,6 +8,7 @@ export type QualityTier = '4K UHD' | '1080p FHD' | '720p HD' | '480p Saver';
 export type MediaCategory = 'movie' | 'tv' | 'anime';
 
 export type PlatformOrigin =
+  | 'Unverified'
   | 'CineTogether Originals'
   | 'Nxsha Originals'
   | 'Netflix'
@@ -38,7 +36,7 @@ export type RoomThemeId =
   | 'velvet-crimson'
   | 'aurora-emerald';
 
-export type PlayerProviderType = 'synced-studio' | 'nxsha-embed';
+export type PlayerProviderType = 'synced-studio' | 'authorized-external';
 
 export type PlaybackCapabilityStatus =
   | 'synced-ready'
@@ -55,8 +53,6 @@ export interface TvEpisodeItem {
   durationMinutes: number;
   airDate: string;
   stillUrl?: string;
-  nxshaEmbedUrl: string;
-  nxshaWatchUrl: string;
 }
 
 export interface TvSeasonDetail {
@@ -90,10 +86,8 @@ export interface MediaItem {
   sectionHeading?: string;
   sourceProvider?: string;
   playbackStatus?: PlaybackCapabilityStatus;
-  nxshaWatchUrl: string;
-  nxshaEmbedUrl: string;
-  streamUrl: string;
-  hlsUrl?: string;
+  authorizedSourceType?: 'mp4' | 'hls' | 'external';
+  authorizedProviderUrl?: string;
   accentColor: string;
   secondaryColor: string;
   director: string;

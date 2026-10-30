@@ -161,16 +161,6 @@ const LANGUAGE_MAP: Record<string, string> = {
   zh: 'Mandarin',
 };
 
-const PLATFORMS_CYCLE: PlatformOrigin[] = [
-  'Netflix',
-  'Disney+',
-  'Prime Video',
-  'Max',
-  'Crunchyroll',
-  'CineTogether Originals',
-  'Nxsha Originals',
-];
-
 const ACCENT_PALETTE = [
   { accent: '#ec4899', secondary: '#3b0764' },
   { accent: '#8b5cf6', secondary: '#1e1b4b' },
@@ -208,6 +198,15 @@ export function getRecentDiagnostics(): DiagnosticLogEntry[] {
   return [...diagnosticLogs];
 }
 
+const tmdbResponseCache = new Map<string, { expiresAt: number; value: { data: any; status: number; durationMs: number; ok: boolean } }>();
+const tmdbInFlight = new Map<string, Promise<{ data: any; status: number; durationMs: number; ok: boolean }>>();
+const TMDB_CACHE_TTL_MS = 3 * 60 * 1000;
+
+function tmdbCacheKey(endpoint: string, params: Record<string, string | number>): string {
+  const normalized = Object.entries(params).sort(([a], [b]) => a.localeCompare(b));
+  return `${endpoint}?${new URLSearchParams(normalized.map(([key, value]) => [key, String(value)]))}`;
+}
+
 // ---------------------------------------------------------------------------
 // Credentials Resolution & Safe Fetch with Retries
 // ---------------------------------------------------------------------------
@@ -218,19 +217,13 @@ function getTmdbCredential(): {
   authType: 'api_key' | 'bearer_token' | 'none';
 } {
   // Check read token / access token first
-  const readToken =
-    process.env.TMDB_READ_TOKEN ||
-    process.env.TMDB_ACCESS_TOKEN ||
-    process.env.VITE_TMDB_READ_TOKEN;
+  const readToken = process.env.TMDB_READ_TOKEN || process.env.TMDB_ACCESS_TOKEN;
   if (readToken && readToken.trim().length > 0) {
     return { bearerToken: readToken.trim(), authType: 'bearer_token' };
   }
 
   // Check standard API key
-  const apiKey =
-    process.env.TMDB_API_KEY ||
-    process.env.VITE_TMDB_API_KEY ||
-    process.env.Cine_togetother; // fallback check
+  const apiKey = process.env.TMDB_API_KEY;
   if (apiKey && apiKey.trim().length > 0 && apiKey !== 'MY_TMDB_API_KEY') {
     // If key looks like a JWT bearer token
     if (apiKey.startsWith('eyJ')) {
@@ -355,10 +348,7 @@ export function normalizeTmdbItem(raw: RawTmdbItem, explicitType?: MediaCategory
     (raw.original_language && LANGUAGE_MAP[raw.original_language.toLowerCase()]) ||
     (mediaType === 'anime' ? 'Japanese' : 'English');
 
-  const platform: PlatformOrigin =
-    mediaType === 'anime'
-      ? 'Crunchyroll'
-      : PLATFORMS_CYCLE[tmdbId % PLATFORMS_CYCLE.length];
+  const platform: PlatformOrigin = 'Unverified';
 
   const palette = ACCENT_PALETTE[tmdbId % ACCENT_PALETTE.length];
   const id = buildStableMediaId('tmdb', mediaType, tmdbId);
@@ -399,16 +389,7 @@ export function normalizeTmdbItem(raw: RawTmdbItem, explicitType?: MediaCategory
     backdropUrl,
     sectionHeading: 'TMDB Live Catalog',
     sourceProvider: 'tmdb',
-    playbackStatus: 'embed-only',
-    nxshaWatchUrl:
-      mediaType === 'movie'
-        ? `https://nxsha.space/watch/movie/${tmdbId}`
-        : `https://nxsha.space/watch/tv/${tmdbId}/1/1`,
-    nxshaEmbedUrl:
-      mediaType === 'movie'
-        ? `https://nxsha.space/embed/movie/${tmdbId}`
-        : `https://nxsha.space/embed/tv/${tmdbId}/1/1`,
-    streamUrl: `/api/media/stream/${id}`,
+    playbackStatus: 'metadata-only',
     accentColor: palette.accent,
     secondaryColor: palette.secondary,
     director: 'Official Selection',
@@ -495,10 +476,7 @@ export function normalizeNxshaCard(
     (raw.originalLanguage && LANGUAGE_MAP[raw.originalLanguage.toLowerCase()]) ||
     (mediaType === 'anime' ? 'Japanese' : 'English');
 
-  const platform: PlatformOrigin =
-    mediaType === 'anime'
-      ? 'Crunchyroll'
-      : PLATFORMS_CYCLE[tmdbId % PLATFORMS_CYCLE.length];
+  const platform: PlatformOrigin = 'Unverified';
 
   const headingLower = sectionHeading.toLowerCase();
   const isTrending =
@@ -519,8 +497,6 @@ export function normalizeNxshaCard(
 
   // Stable provider-qualified ID
   const id = buildStableMediaId('nxsha', mediaType, tmdbId);
-  const isCuratedStudio = INITIAL_CATALOG.some((c) => c.tmdbId === tmdbId);
-
   const poster = raw.posterUrl || raw.poster;
   const backdrop = raw.backdropUrl || raw.backdrop || poster;
 
@@ -548,16 +524,7 @@ export function normalizeNxshaCard(
     backdropUrl: backdrop || undefined,
     sectionHeading,
     sourceProvider: 'nxsha.space',
-    playbackStatus: isCuratedStudio ? 'synced-ready' : 'embed-only',
-    nxshaWatchUrl:
-      mediaType === 'movie'
-        ? `https://nxsha.space/watch/movie/${tmdbId}`
-        : `https://nxsha.space/watch/tv/${tmdbId}/1/1`,
-    nxshaEmbedUrl:
-      mediaType === 'movie'
-        ? `https://nxsha.space/embed/movie/${tmdbId}`
-        : `https://nxsha.space/embed/tv/${tmdbId}/1/1`,
-    streamUrl: `/api/media/stream/${id}`,
+    playbackStatus: 'metadata-only',
     accentColor: palette.accent,
     secondaryColor: palette.secondary,
     director: sectionHeading ? `${sectionHeading} Selection` : 'Featured Director',
@@ -591,6 +558,32 @@ export function normalizeNxshaCard(
 // ---------------------------------------------------------------------------
 
 export async function fetchTmdbEndpoint(
+  endpoint: string,
+  params: Record<string, string | number> = {}
+): Promise<{ data: any; status: number; durationMs: number; ok: boolean }> {
+  const key = tmdbCacheKey(endpoint, params);
+  const now = Date.now();
+  const cached = tmdbResponseCache.get(key);
+  if (cached && cached.expiresAt > now) return { ...cached.value, durationMs: 0 };
+  if (cached) tmdbResponseCache.delete(key);
+  const inFlight = tmdbInFlight.get(key);
+  if (inFlight) return inFlight;
+
+  const request = fetchTmdbEndpointUncached(endpoint, params).then((result) => {
+    if (result.ok) {
+      for (const [cacheKey, entry] of tmdbResponseCache) {
+        if (entry.expiresAt <= Date.now()) tmdbResponseCache.delete(cacheKey);
+      }
+      if (tmdbResponseCache.size >= 400) tmdbResponseCache.delete(tmdbResponseCache.keys().next().value!);
+      tmdbResponseCache.set(key, { expiresAt: Date.now() + TMDB_CACHE_TTL_MS, value: result });
+    }
+    return result;
+  }).finally(() => tmdbInFlight.delete(key));
+  tmdbInFlight.set(key, request);
+  return request;
+}
+
+async function fetchTmdbEndpointUncached(
   endpoint: string,
   params: Record<string, string | number> = {}
 ): Promise<{ data: any; status: number; durationMs: number; ok: boolean }> {
@@ -865,8 +858,6 @@ export async function getTmdbTvSeasons(
         durationMinutes: ep.runtime || 48,
         airDate: ep.air_date || '2026',
         stillUrl: ep.still_path ? `https://image.tmdb.org/t/p/w500${ep.still_path}` : undefined,
-        nxshaEmbedUrl: `https://nxsha.space/embed/tv/${tmdbId}/${s.season_number}/${ep.episode_number}`,
-        nxshaWatchUrl: `https://nxsha.space/watch/tv/${tmdbId}/${s.season_number}/${ep.episode_number}`,
       }));
 
       seasonsDetail.push({
@@ -881,7 +872,7 @@ export async function getTmdbTvSeasons(
   }
 
   return {
-    source: 'TMDB Official Episode Metadata + Nxsha Embed Resolver',
+    source: 'TMDB episode metadata',
     seasons: seasonsDetail,
     ok: seasonsDetail.length > 0,
   };
@@ -1076,9 +1067,15 @@ export async function fetchFullNxshaCatalog(forceRefresh = false) {
   return nxshaFetchInFlight;
 }
 
+const nxshaSearchCache = new Map<string, { expiresAt: number; items: MediaItem[] }>();
+
 export async function searchNxsha(query: string): Promise<MediaItem[]> {
   const cleanQ = query.trim();
   if (!cleanQ) return [];
+  const cacheKey = cleanQ.toLowerCase();
+  const cached = nxshaSearchCache.get(cacheKey);
+  if (cached && cached.expiresAt > Date.now()) return cached.items;
+  if (cached) nxshaSearchCache.delete(cacheKey);
 
   const start = Date.now();
   try {
@@ -1112,19 +1109,23 @@ export async function searchNxsha(query: string): Promise<MediaItem[]> {
 
     logDiagnostic({
       provider: 'Nxsha',
-      endpoint: `/api/search-suggestions?q=${encodeURIComponent(cleanQ)}`,
+      endpoint: '/api/search-suggestions',
       status: resp.status,
       resultCount: normalized.length,
       durationMs,
       errorCategory: null,
     });
 
+    for (const [key, entry] of nxshaSearchCache) if (entry.expiresAt <= Date.now()) nxshaSearchCache.delete(key);
+    if (nxshaSearchCache.size >= 200) nxshaSearchCache.delete(nxshaSearchCache.keys().next().value!);
+    nxshaSearchCache.set(cacheKey, { expiresAt: Date.now() + 60_000, items: normalized });
+
     return normalized;
   } catch (err: any) {
     const durationMs = Date.now() - start;
     logDiagnostic({
       provider: 'Nxsha',
-      endpoint: `/api/search-suggestions?q=${encodeURIComponent(cleanQ)}`,
+      endpoint: '/api/search-suggestions',
       status: 'NETWORK_ERROR',
       resultCount: 0,
       durationMs,

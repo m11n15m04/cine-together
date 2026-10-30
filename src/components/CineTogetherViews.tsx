@@ -21,6 +21,7 @@ import {
 } from 'lucide-react';
 import { signInWithPopup, signOut } from 'firebase/auth';
 import { auth, googleAuthProvider } from '../lib/firebase';
+import { apiFetch, clearGuestSession, saveRoomAccessToken } from '../lib/api';
 import {
   BRAND_CONFIG,
   MediaItem,
@@ -31,7 +32,6 @@ import {
   UserProfile,
 } from '../types';
 import { ROOM_THEMES } from '../data/catalog';
-import { generateRoomCode } from '../utils/streamEngine';
 import { MediaPoster } from './MediaPoster';
 
 interface CreateJoinPartyViewProps {
@@ -59,6 +59,7 @@ export const CreateJoinPartyView: React.FC<CreateJoinPartyViewProps> = ({
   const [maxParticipants, setMaxParticipants] = useState<number>(10);
   const [collaborativeControls, setCollaborativeControls] = useState<boolean>(true);
   const [creating, setCreating] = useState<boolean>(false);
+  const [createError, setCreateError] = useState<string | null>(null);
 
   // Join existing room state
   const [joinCodeInput, setJoinCodeInput] = useState<string>('');
@@ -82,17 +83,14 @@ export const CreateJoinPartyView: React.FC<CreateJoinPartyViewProps> = ({
     e.preventDefault();
     setCreating(true);
     const chosenMedia = catalog.find((c) => c.id === selectedMediaId) || defaultMedia;
-    const generatedCode = generateRoomCode(selectedMode);
+    setCreateError(null);
 
     try {
-      const resp = await fetch('/api/party/rooms', {
+      const resp = await apiFetch('/api/party/rooms', {
         method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
-          roomCode: generatedCode,
           mode: selectedMode,
           roomName: roomTitle,
-          hostId: userProfile.uid,
           hostName: userProfile.displayName,
           mediaId: chosenMedia.id,
           mediaType: chosenMedia.mediaType,
@@ -101,20 +99,20 @@ export const CreateJoinPartyView: React.FC<CreateJoinPartyViewProps> = ({
           collaborativeControls,
           roomTheme: selectedTheme,
         }),
-      });
+      }, { allowGuest: true, displayName: userProfile.displayName });
       const data = await resp.json();
-      const finalCode = data?.room?.roomCode || generatedCode;
+      if (!resp.ok || !data?.room?.roomCode || !data?.roomAccessToken) {
+        throw new Error(data?.error || 'The room could not be created.');
+      }
+      const finalCode = data.room.roomCode as string;
+      saveRoomAccessToken(finalCode, data.roomAccessToken);
       onLaunchRoom({
         mode: selectedMode,
         roomCode: finalCode,
         media: chosenMedia,
       });
-    } catch {
-      onLaunchRoom({
-        mode: selectedMode,
-        roomCode: generatedCode,
-        media: chosenMedia,
-      });
+    } catch (error) {
+      setCreateError(error instanceof Error ? error.message : 'The room could not be created.');
     } finally {
       setCreating(false);
     }
@@ -130,30 +128,29 @@ export const CreateJoinPartyView: React.FC<CreateJoinPartyViewProps> = ({
     setJoinError(null);
 
     try {
-      const resp = await fetch(`/api/party/rooms/${encodeURIComponent(cleanCode)}/verify`, {
+      const resp = await apiFetch(`/api/party/rooms/${encodeURIComponent(cleanCode)}/verify`, {
         method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ password: joinPasswordInput }),
-      });
+      }, { allowGuest: true, displayName: userProfile.displayName });
       const data = await resp.json();
       if (!resp.ok || data.valid === false) {
         setJoinError(data.error || 'Invalid room password or code.');
         return;
       }
+      if (!data.roomAccessToken) {
+        setJoinError('The server did not return a room invitation.');
+        return;
+      }
+      saveRoomAccessToken(cleanCode, data.roomAccessToken);
       const mode: RoomMode =
         data.mode === 'couple' || cleanCode.startsWith('LOVE') ? 'couple' : 'group';
       onLaunchRoom({
         mode,
         roomCode: cleanCode,
-        media: defaultMedia,
+        media: catalog.find((item) => item.id === data.room?.mediaId) || defaultMedia,
       });
-    } catch {
-      const mode: RoomMode = cleanCode.startsWith('LOVE') ? 'couple' : 'group';
-      onLaunchRoom({
-        mode,
-        roomCode: cleanCode,
-        media: defaultMedia,
-      });
+    } catch (error) {
+      setJoinError(error instanceof Error ? error.message : 'Could not verify the room.');
     }
   };
 
@@ -396,6 +393,7 @@ export const CreateJoinPartyView: React.FC<CreateJoinPartyViewProps> = ({
                 : 'Launch Friends & Group Cinema 🎉'}
             </span>
           </button>
+          {createError && <p role="alert" className="text-xs text-rose-400">{createError}</p>}
         </form>
 
         {/* Join Existing Watch Party */}
@@ -453,54 +451,11 @@ export const CreateJoinPartyView: React.FC<CreateJoinPartyViewProps> = ({
             </button>
           </form>
 
-          {/* Instant Featured Demo Rooms */}
+          {/* Rooms are only shown when backed by persisted server records. */}
           <div className="space-y-2.5 pt-4 border-t border-slate-800">
-            <div className="text-xs font-semibold text-slate-400 uppercase tracking-wider">
-              Active Featured Rooms
+            <div className="text-xs text-slate-400">
+              Enter a room code shared by its host. Rooms are created when a host starts a party.
             </div>
-            <button
-              type="button"
-              onClick={() =>
-                onLaunchRoom({
-                  mode: 'couple',
-                  roomCode: 'LOVE-2026',
-                  media: catalog[0] || defaultMedia,
-                })
-              }
-              className="w-full p-3 rounded-xl bg-rose-950/30 hover:bg-rose-950/50 border border-rose-500/30 flex items-center justify-between text-left transition-colors"
-            >
-              <div>
-                <div className="text-xs font-semibold text-white">
-                  LOVE-2026 · Kyoto Rain Date Night ❤️
-                </div>
-                <div className="text-[11px] text-rose-300">
-                  Couple Mode · Velvet Echoes in Kyoto
-                </div>
-              </div>
-              <span className="text-xs font-semibold text-rose-200">Join →</span>
-            </button>
-
-            <button
-              type="button"
-              onClick={() =>
-                onLaunchRoom({
-                  mode: 'group',
-                  roomCode: 'CLUB-4096',
-                  media: catalog[1] || defaultMedia,
-                })
-              }
-              className="w-full p-3 rounded-xl bg-violet-950/30 hover:bg-violet-950/50 border border-violet-500/30 flex items-center justify-between text-left transition-colors"
-            >
-              <div>
-                <div className="text-xs font-semibold text-white">
-                  CLUB-4096 · Spider-Verse Premiere 🎉
-                </div>
-                <div className="text-[11px] text-violet-300">
-                  Group Mode · Spider-Man: Brand New Day
-                </div>
-              </div>
-              <span className="text-xs font-semibold text-violet-200">Join →</span>
-            </button>
           </div>
         </div>
       </div>
@@ -558,7 +513,7 @@ export const MediaDetailView: React.FC<MediaDetailViewProps> = ({
           setSeasons(data.seasons);
           setSelectedSeasonNum(data.seasons[0].seasonNumber || 1);
           setSelectedEpisodeNum(data.seasons[0].episodes?.[0]?.episodeNumber || 1);
-          setEpisodeSourceLabel(String(data.source || 'Nxsha Episodic Stream Resolver'));
+          setEpisodeSourceLabel(String(data.source || 'Episode metadata'));
         }
       })
       .catch(() => {})
@@ -580,11 +535,7 @@ export const MediaDetailView: React.FC<MediaDetailViewProps> = ({
 
   const buildEpisodicMediaItem = (seasonNumber: number, episodeNumber: number): MediaItem => {
     if (!isEpisodic) return item;
-    return {
-      ...item,
-      nxshaEmbedUrl: `https://nxsha.space/embed/tv/${item.tmdbId}/${seasonNumber}/${episodeNumber}`,
-      nxshaWatchUrl: `https://nxsha.space/watch/tv/${item.tmdbId}/${seasonNumber}/${episodeNumber}`,
-    };
+    return { ...item, id: `${item.id}:s${seasonNumber}:e${episodeNumber}` };
   };
 
   return (
@@ -719,19 +670,11 @@ export const MediaDetailView: React.FC<MediaDetailViewProps> = ({
               )}
             </button>
 
-            <a
-              href={
-                isEpisodic
-                  ? `https://nxsha.space/watch/tv/${item.tmdbId}/${selectedSeasonNum}/${selectedEpisodeNum}`
-                  : item.nxshaWatchUrl
-              }
-              target="_blank"
-              rel="noopener noreferrer"
-              className="inline-flex items-center gap-1.5 px-3.5 py-3 rounded-xl bg-slate-950/90 hover:bg-slate-800 border border-slate-800 text-xs font-medium text-slate-300"
-            >
-              <ExternalLink className="w-3.5 h-3.5" />
-              <span>Open on Nxsha</span>
-            </a>
+            {!isEpisodic && item.authorizedSourceType === 'external' && item.authorizedProviderUrl && (
+              <a href={item.authorizedProviderUrl} target="_blank" rel="noopener noreferrer" className="inline-flex items-center gap-1.5 px-3.5 py-3 rounded-xl bg-slate-950/90 hover:bg-slate-800 border border-slate-800 text-xs font-medium text-slate-300">
+                <ExternalLink className="w-3.5 h-3.5" /><span>Open authorized provider</span>
+              </a>
+            )}
           </div>
         </div>
       </div>
@@ -938,20 +881,26 @@ export const ProfileAndAuthView: React.FC<ProfileAndAuthViewProps> = ({
     onUpdateProfile(updated);
 
     try {
-      await fetch('/api/profile/preferences', {
+      if (!userProfile.isGuest) {
+        const response = await apiFetch('/api/profile/preferences', {
         method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify(updated),
       });
+        if (!response.ok) throw new Error('Profile could not be saved to the server.');
+      }
+      setSavedNotice(userProfile.isGuest ? 'Preferences saved on this device.' : 'Profile preferences saved.');
     } catch {
-      // Saved locally as fallback
+      setSavedNotice('Preferences are saved on this device; server sync failed.');
     }
-    setSavedNotice('Profile & Cinema Theme saved to Cloud SQL.');
     setTimeout(() => setSavedNotice(null), 3000);
   };
 
   const handleGoogleSignIn = async () => {
     setAuthError(null);
+    if (!auth) {
+      setAuthError('Google sign-in is unavailable until Firebase client settings are configured.');
+      return;
+    }
     try {
       const cred = await signInWithPopup(auth, googleAuthProvider);
       if (cred.user) {
@@ -976,7 +925,8 @@ export const ProfileAndAuthView: React.FC<ProfileAndAuthViewProps> = ({
 
   const handleSignOut = async () => {
     try {
-      await signOut(auth);
+      if (auth) await signOut(auth);
+      clearGuestSession();
     } catch {
       // ignore
     }

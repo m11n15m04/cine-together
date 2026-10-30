@@ -1,4 +1,4 @@
-import React, { useEffect, useMemo, useState } from 'react';
+import React, { useEffect, useMemo, useRef, useState } from 'react';
 import {
   AlertCircle,
   Bell,
@@ -31,7 +31,6 @@ import {
   INITIAL_CATALOG,
   INITIAL_NOTIFICATIONS,
   INITIAL_SOCIAL_POSTS,
-  INITIAL_WATCH_HISTORY,
 } from './data/catalog';
 import {
   BRAND_CONFIG,
@@ -48,11 +47,11 @@ import {
 import {
   computePersonalizedRecommendations,
   deduplicateAndMergeCatalog,
-  estimateOfflineSizeMB,
   filterAndSearchCatalog,
   paginateCatalog,
 } from './utils/streamEngine';
 import { MediaPoster } from './components/MediaPoster';
+import { apiFetch, saveRoomAccessToken } from './lib/api';
 import { AdaptiveVideoPlayer } from './components/AdaptiveVideoPlayer';
 import { WatchPartyWorkspace } from './components/WatchPartyWorkspace';
 import { AiVoiceAndConcierge } from './components/AiVoiceAndConcierge';
@@ -154,7 +153,7 @@ export default function App() {
   const [isDemoData, setIsDemoData] = useState<boolean>(false);
 
   // Active Watch Room Code & Mode
-  const [activeRoomCode, setActiveRoomCode] = useState<string>('LOVE-2026');
+  const [activeRoomCode, setActiveRoomCode] = useState<string>('');
   const [activeRoomMode, setActiveRoomMode] = useState<RoomMode>('couple');
 
   // User Profile (persisted in localStorage + Cloud SQL)
@@ -166,9 +165,9 @@ export default function App() {
       // ignore
     }
     return {
-      uid: `usr-${Math.random().toString(36).slice(2, 8)}`,
-      email: 'alex@cinetogether.app',
-      displayName: 'Alex Rivera',
+      uid: 'guest-local',
+      email: 'guest@cinetogether.app',
+      displayName: 'Cinema Guest',
       preferredTheme: 'rose-nebula',
       isGuest: true,
     };
@@ -194,44 +193,11 @@ export default function App() {
   const [isTheaterOpen, setIsTheaterOpen] = useState<boolean>(false);
 
   // User Watch History & My List (Watchlist)
-  const [watchHistory, setWatchHistory] = useState<WatchHistoryEntry[]>(INITIAL_WATCH_HISTORY);
-  const [likedIds, setLikedIds] = useState<string[]>(['nx-204988', 'nx-969681', 'nx-278']);
+  const [watchHistory, setWatchHistory] = useState<WatchHistoryEntry[]>([]);
+  const [likedIds, setLikedIds] = useState<string[]>([]);
 
   // Offline Vault Downloads
-  const [downloads, setDownloads] = useState<OfflineDownloadItem[]>([
-    {
-      mediaId: 'nx-204988',
-      title: 'Velvet Echoes in Kyoto',
-      mediaType: 'tv',
-      quality: '4K UHD',
-      sizeMB: 1456,
-      downloadedAt: 'Today, 21:05',
-      streamUrl: '/api/media/stream/nx-204988',
-      blobAvailable: true,
-      progress: 100,
-      status: 'completed',
-      accentColor: '#ec4899',
-      secondaryColor: '#3b0764',
-      year: '2026',
-      durationMinutes: 52,
-    },
-    {
-      mediaId: 'nx-969681',
-      title: 'Spider-Man: Brand New Day',
-      mediaType: 'movie',
-      quality: '1080p FHD',
-      sizeMB: 1562,
-      downloadedAt: 'Today, 20:15',
-      streamUrl: '/api/media/stream/nx-969681',
-      blobAvailable: true,
-      progress: 100,
-      status: 'completed',
-      accentColor: '#8b5cf6',
-      secondaryColor: '#1e1b4b',
-      year: '2026',
-      durationMinutes: 142,
-    },
-  ]);
+  const [downloads, setDownloads] = useState<OfflineDownloadItem[]>([]);
   const [isOfflineSimulated, setIsOfflineSimulated] = useState<boolean>(false);
 
   // Social Broadcast Posts & Toast Feedback
@@ -272,12 +238,14 @@ export default function App() {
       }
 
       if (path.startsWith('/room/couple/')) {
-        const code = path.replace('/room/couple/', '').trim().toUpperCase() || 'LOVE-2026';
+        const code = path.replace('/room/couple/', '').trim().toUpperCase();
+        if (!code) { setActiveTab('create-party'); return; }
         setActiveRoomCode(code);
         setActiveRoomMode('couple');
         setActiveTab('couple-room');
       } else if (path.startsWith('/room/group/')) {
-        const code = path.replace('/room/group/', '').trim().toUpperCase() || 'CLUB-4096';
+        const code = path.replace('/room/group/', '').trim().toUpperCase();
+        if (!code) { setActiveTab('create-party'); return; }
         setActiveRoomCode(code);
         setActiveRoomMode('group');
         setActiveTab('group-room');
@@ -382,7 +350,9 @@ export default function App() {
   useEffect(() => {
     loadInitialFeeds();
 
-    fetch(`/api/watchlist?userId=${encodeURIComponent(userProfile.uid)}`)
+    if (userProfile.isGuest) return;
+
+    apiFetch('/api/watchlist')
       .then((r) => r.json())
       .then((data) => {
         if (Array.isArray(data.items) && data.items.length > 0) {
@@ -391,7 +361,27 @@ export default function App() {
         }
       })
       .catch(() => {});
-  }, [userProfile.uid]);
+
+    apiFetch('/api/watch-history')
+      .then(async (response) => response.ok ? response.json() : null)
+      .then((data) => {
+        if (!Array.isArray(data?.items)) return;
+        setWatchHistory(data.items.map((row: any) => {
+          const media = catalog.find((item) => item.id === row.mediaId);
+          return {
+            mediaId: row.mediaId,
+            watchedAt: row.lastWatchedAt,
+            progressSeconds: row.progressSeconds,
+            durationSeconds: row.durationSeconds,
+            completed: row.progressSeconds >= row.durationSeconds - 15,
+            genres: media?.genres || [],
+            platform: media?.platform || 'Unverified',
+            roomType: row.roomType === 'couple' || row.roomType === 'group' ? row.roomType : 'solo',
+          } as WatchHistoryEntry;
+        }));
+      })
+      .catch(() => {});
+  }, [userProfile.uid, userProfile.isGuest]);
 
   // Handle Dynamic "Load More" from backend provider
   const handleLoadMoreCatalog = async () => {
@@ -471,6 +461,11 @@ export default function App() {
   }, [searchQuery, categoryFilter]);
 
   const navigateToTab = (tab: ActiveTab, customPath?: string) => {
+    if ((tab === 'couple-room' || tab === 'group-room') && !activeRoomCode && !customPath) {
+      setActiveTab('create-party');
+      window.history.pushState({}, '', '/create-party');
+      return;
+    }
     setActiveTab(tab);
     if (tab === 'movies') setCategoryFilter('movie');
     else if (tab === 'tv') setCategoryFilter('tv');
@@ -510,6 +505,24 @@ export default function App() {
     setTimeout(() => {
       setStatusBanner((prev) => (prev === msg ? null : prev));
     }, 3200);
+  };
+
+  const launchParty = async (item: MediaItem, mode: RoomMode) => {
+    try {
+      const response = await apiFetch('/api/party/rooms', {
+        method: 'POST',
+        body: JSON.stringify({ mode, roomName: mode === 'couple' ? 'Couple Cinema' : 'Group Cinema', hostName: userProfile.displayName, mediaId: item.id, mediaType: item.mediaType, maxParticipants: mode === 'couple' ? 2 : 10, collaborativeControls: mode === 'couple' }),
+      }, { allowGuest: true, displayName: userProfile.displayName });
+      const result = await response.json();
+      if (!response.ok || !result.room?.roomCode || !result.roomAccessToken) throw new Error(result.error || 'Watch room could not be created.');
+      saveRoomAccessToken(result.room.roomCode, result.roomAccessToken);
+      setSelectedMedia(item);
+      setActiveRoomMode(mode);
+      setActiveRoomCode(result.room.roomCode);
+      navigateToTab(mode === 'couple' ? 'couple-room' : 'group-room', `/room/${mode}/${result.room.roomCode}`);
+    } catch (error) {
+      triggerBanner(error instanceof Error ? error.message : 'Watch room could not be created.');
+    }
   };
 
   // Filtered catalog & Paginated Slice
@@ -581,39 +594,35 @@ export default function App() {
     setSelectedMedia(item);
     setIsTheaterOpen(true);
     setActiveTab('home');
+    playbackSessionRef.current = null;
+  };
 
-    if (!securitySettings.incognitoSession) {
-      setWatchHistory((prev) => {
-        const filtered = prev.filter((h) => h.mediaId !== item.id);
-        return [
-          {
-            mediaId: item.id,
-            watchedAt: new Date().toISOString(),
-            progressSeconds: 300,
-            durationSeconds: (item.durationMinutes || 110) * 60,
-            completed: false,
-            genres: item.genres,
-            platform: item.platform,
-            roomType: 'solo',
-          },
-          ...filtered,
-        ];
-      });
-
-      fetch('/api/sessions/record', {
+  const playbackSessionRef = useRef<{ mediaId: string; sessionId: string } | null>(null);
+  const recordPlaybackStart = async (item: MediaItem, currentTimeSeconds: number) => {
+    if (securitySettings.incognitoSession || userProfile.isGuest || playbackSessionRef.current?.mediaId === item.id) return;
+    try {
+      const response = await apiFetch('/api/watch-history', {
         method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({
-          userId: userProfile.uid,
-          mediaId: item.id,
-          mediaTitle: item.title,
-          mediaType: item.mediaType,
-          roomType: 'solo',
-          progressSeconds: 300,
-          durationSeconds: (item.durationMinutes || 110) * 60,
-        }),
-      }).catch(() => {});
+        body: JSON.stringify({ mediaId: item.id, mediaTitle: item.title, mediaType: item.mediaType, roomType: 'solo', progressSeconds: currentTimeSeconds, durationSeconds: Math.max(1, item.durationMinutes * 60) }),
+      });
+      const result = await response.json();
+      if (!response.ok || !result.session?.id) return;
+      playbackSessionRef.current = { mediaId: item.id, sessionId: result.session.id };
+    } catch { /* Playback remains available if history persistence is unavailable. */ }
+  };
+  const savePlaybackProgress = async (item: MediaItem, progressSeconds: number, durationSeconds: number) => {
+    if (securitySettings.incognitoSession || userProfile.isGuest) return;
+    let activeSession = playbackSessionRef.current;
+    if (!activeSession || activeSession.mediaId !== item.id) {
+      await recordPlaybackStart(item, progressSeconds);
+      activeSession = playbackSessionRef.current;
     }
+    if (!activeSession || activeSession.mediaId !== item.id) return;
+    const response = await apiFetch(`/api/watch-history/${encodeURIComponent(activeSession.sessionId)}`, {
+      method: 'PATCH', body: JSON.stringify({ progressSeconds, durationSeconds: Math.max(1, durationSeconds), ended: progressSeconds >= durationSeconds - 15 }),
+    });
+    if (!response.ok) return;
+    setWatchHistory((previous) => [{ mediaId: item.id, watchedAt: new Date().toISOString(), progressSeconds, durationSeconds, completed: progressSeconds >= durationSeconds - 15, genres: item.genres, platform: item.platform, roomType: 'solo' }, ...previous.filter((entry) => entry.mediaId !== item.id)]);
   };
 
   const handleOpenMediaDetail = (item: MediaItem) => {
@@ -621,36 +630,8 @@ export default function App() {
     navigateToTab('media-detail', `/media/${item.mediaType}/${item.id}`);
   };
 
-  const handleDownloadMedia = (item: MediaItem, quality: QualityTier = '1080p FHD') => {
-    const sizeMB = estimateOfflineSizeMB(item.durationMinutes, quality);
-    setDownloads((prev) => {
-      const exists = prev.some((d) => d.mediaId === item.id);
-      if (exists) {
-        return prev.map((d) =>
-          d.mediaId === item.id ? { ...d, quality, sizeMB, status: 'completed', progress: 100 } : d
-        );
-      }
-      return [
-        {
-          mediaId: item.id,
-          title: item.title,
-          mediaType: item.mediaType,
-          quality,
-          sizeMB,
-          downloadedAt: 'Just now',
-          streamUrl: item.streamUrl,
-          blobAvailable: true,
-          progress: 100,
-          status: 'completed',
-          accentColor: item.accentColor,
-          secondaryColor: item.secondaryColor,
-          year: item.year,
-          durationMinutes: item.durationMinutes,
-        },
-        ...prev,
-      ];
-    });
-    triggerBanner(`Downloaded "${item.title}" (${quality} · ${sizeMB} MB) to Offline Vault.`);
+  const handleDownloadMedia = (_item: MediaItem, _quality: QualityTier = '1080p FHD') => {
+    triggerBanner('Offline downloads are not configured for this backend.');
   };
 
   const handleRemoveDownload = (mediaId: string) => {
@@ -680,28 +661,28 @@ export default function App() {
     setLikedIds((prev) =>
       alreadyLiked ? prev.filter((id) => id !== item.id) : [...prev, item.id]
     );
-    triggerBanner(
-      alreadyLiked
-        ? `Removed "${item.title}" from My List.`
-        : `Saved "${item.title}" to My List (Cloud SQL Synced).`
-    );
+    if (userProfile.isGuest) {
+      triggerBanner(alreadyLiked ? `Removed "${item.title}" from this session's My List.` : `Saved "${item.title}" for this browser session. Sign in to sync it across devices.`);
+      return;
+    }
 
     try {
-      await fetch('/api/watchlist/toggle', {
+      const response = await apiFetch('/api/watchlist/toggle', {
         method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
-          userId: userProfile.uid,
           mediaId: item.id,
           mediaTitle: item.title,
           mediaType: item.mediaType,
-          posterUrl: `/poster/${item.id}`,
+          posterUrl: item.posterUrl || '',
           year: item.year,
           rating: item.rating,
         }),
       });
+      if (!response.ok) throw new Error('Watchlist was not saved.');
+      triggerBanner(alreadyLiked ? `Removed "${item.title}" from My List.` : `Saved "${item.title}" to your watchlist.`);
     } catch {
-      // Optimistic state preserved
+      setLikedIds((previous) => alreadyLiked ? [...previous, item.id] : previous.filter((id) => id !== item.id));
+      triggerBanner('Watchlist update failed. Please try again.');
     }
   };
 
@@ -933,6 +914,8 @@ export default function App() {
             <AdaptiveVideoPlayer
               item={selectedMedia}
               isOfflineMode={isOfflineSimulated}
+              onPlaybackChange={(playing, position) => { if (playing) void recordPlaybackStart(selectedMedia, position); }}
+              onPlaybackProgress={(position, duration) => { void savePlaybackProgress(selectedMedia, position, duration); }}
               onTriggerDownload={handleDownloadMedia}
               onTriggerShare={handleQuickShare}
               onClose={() => setIsTheaterOpen(false)}
@@ -1001,11 +984,7 @@ export default function App() {
 
                     <button
                       type="button"
-                      onClick={() => {
-                        setActiveRoomMode('couple');
-                        setActiveRoomCode('LOVE-2026');
-                        navigateToTab('couple-room', '/room/couple/LOVE-2026');
-                      }}
+                      onClick={() => { void launchParty(selectedMedia, 'couple'); }}
                       className="inline-flex items-center gap-2 px-4 py-3 text-xs sm:text-sm font-semibold bg-gradient-to-r from-rose-500 to-pink-600 hover:from-rose-400 hover:to-pink-500 text-white rounded-xl transition-all whitespace-nowrap shrink-0 shadow-lg"
                     >
                       <Heart className="w-4 h-4 fill-current" />
@@ -1014,11 +993,7 @@ export default function App() {
 
                     <button
                       type="button"
-                      onClick={() => {
-                        setActiveRoomMode('group');
-                        setActiveRoomCode('CLUB-4096');
-                        navigateToTab('group-room', '/room/group/CLUB-4096');
-                      }}
+                      onClick={() => { void launchParty(selectedMedia, 'group'); }}
                       className="inline-flex items-center gap-2 px-4 py-3 text-xs sm:text-sm font-semibold bg-gradient-to-r from-violet-600 to-indigo-600 hover:from-violet-500 hover:to-indigo-500 text-white rounded-xl transition-all whitespace-nowrap shrink-0 shadow-lg"
                     >
                       <Users className="w-4 h-4" />
@@ -1369,11 +1344,7 @@ export default function App() {
                               <button
                                 type="button"
                                 title="Start Couple Cinema with this title"
-                                onClick={() => {
-                                  setSelectedMedia(item);
-                                  setActiveRoomMode('couple');
-                                  navigateToTab('couple-room', '/room/couple/LOVE-2026');
-                                }}
+                                onClick={() => { void launchParty(item, 'couple'); }}
                                 aria-label={`Start Couple Watch Party for ${item.title}`}
                                 className="p-2 bg-rose-500/15 hover:bg-rose-500 text-rose-300 hover:text-white border border-rose-500/30 rounded-xl transition-colors"
                               >
@@ -1383,11 +1354,7 @@ export default function App() {
                               <button
                                 type="button"
                                 title="Start Group Party with this title"
-                                onClick={() => {
-                                  setSelectedMedia(item);
-                                  setActiveRoomMode('group');
-                                  navigateToTab('group-room', '/room/group/CLUB-4096');
-                                }}
+                                onClick={() => { void launchParty(item, 'group'); }}
                                 aria-label={`Start Group Watch Party for ${item.title}`}
                                 className="p-2 bg-violet-500/15 hover:bg-violet-600 text-violet-300 hover:text-white border border-violet-500/30 rounded-xl transition-colors"
                               >
@@ -1567,11 +1534,7 @@ export default function App() {
                         <button
                           type="button"
                           title="Start Couple Watch Party"
-                          onClick={() => {
-                            setSelectedMedia(item);
-                            setActiveRoomMode('couple');
-                            navigateToTab('couple-room', '/room/couple/LOVE-2026');
-                          }}
+                          onClick={() => { void launchParty(item, 'couple'); }}
                           className="p-1.5 bg-rose-500/20 hover:bg-rose-500 text-rose-300 hover:text-white rounded-xl transition-colors"
                         >
                           <Heart className="w-3.5 h-3.5" />
@@ -1648,11 +1611,7 @@ export default function App() {
                         <button
                           type="button"
                           title="Start Group Watch Party"
-                          onClick={() => {
-                            setSelectedMedia(item);
-                            setActiveRoomMode('group');
-                            navigateToTab('group-room', '/room/group/CLUB-4096');
-                          }}
+                          onClick={() => { void launchParty(item, 'group'); }}
                           className="p-1.5 bg-indigo-500/20 hover:bg-indigo-600 text-indigo-300 hover:text-white rounded-xl transition-colors"
                         >
                           <Users className="w-3.5 h-3.5" />
@@ -1728,11 +1687,7 @@ export default function App() {
                         <button
                           type="button"
                           title="Start Couple Watch Party"
-                          onClick={() => {
-                            setSelectedMedia(item);
-                            setActiveRoomMode('couple');
-                            navigateToTab('couple-room', '/room/couple/LOVE-2026');
-                          }}
+                          onClick={() => { void launchParty(item, 'couple'); }}
                           className="p-1.5 bg-rose-500/20 hover:bg-rose-500 text-rose-300 hover:text-white rounded-xl transition-colors"
                         >
                           <Heart className="w-3.5 h-3.5" />
@@ -1758,7 +1713,7 @@ export default function App() {
                   </div>
                   <button
                     type="button"
-                    onClick={() => navigateToTab('couple-room', '/room/couple/LOVE-2026')}
+                    onClick={() => navigateToTab('create-party')}
                     className="text-xs font-semibold text-rose-400 hover:underline"
                   >
                     Enter Couple Cinema →
@@ -1782,11 +1737,7 @@ export default function App() {
                       </div>
                       <button
                         type="button"
-                        onClick={() => {
-                          setSelectedMedia(item);
-                          setActiveRoomMode('couple');
-                          navigateToTab('couple-room', '/room/couple/LOVE-2026');
-                        }}
+                        onClick={() => { void launchParty(item, 'couple'); }}
                         className="w-full inline-flex items-center justify-center gap-1.5 py-2 px-3 text-xs font-semibold bg-gradient-to-r from-rose-500 to-pink-600 hover:from-rose-400 hover:to-pink-500 text-white rounded-xl transition-all"
                       >
                         <Heart className="w-3.5 h-3.5 fill-current" />
@@ -1812,7 +1763,7 @@ export default function App() {
                   </div>
                   <button
                     type="button"
-                    onClick={() => navigateToTab('group-room', '/room/group/CLUB-4096')}
+                    onClick={() => navigateToTab('create-party')}
                     className="text-xs font-semibold text-violet-400 hover:underline"
                   >
                     Enter Group Cinema →
@@ -1836,11 +1787,7 @@ export default function App() {
                       </div>
                       <button
                         type="button"
-                        onClick={() => {
-                          setSelectedMedia(item);
-                          setActiveRoomMode('group');
-                          navigateToTab('group-room', '/room/group/CLUB-4096');
-                        }}
+                        onClick={() => { void launchParty(item, 'group'); }}
                         className="w-full inline-flex items-center justify-center gap-1.5 py-2 px-3 text-xs font-semibold bg-gradient-to-r from-violet-600 to-indigo-600 hover:from-violet-500 hover:to-indigo-500 text-white rounded-xl transition-all"
                       >
                         <Users className="w-3.5 h-3.5" />
@@ -1984,22 +1931,14 @@ export default function App() {
                       <div className="flex items-center gap-2">
                         <button
                           type="button"
-                          onClick={() => {
-                            setSelectedMedia(item);
-                            setActiveRoomMode('couple');
-                            navigateToTab('couple-room', '/room/couple/LOVE-2026');
-                          }}
+                          onClick={() => { void launchParty(item, 'couple'); }}
                           className="flex-1 py-2 rounded-xl bg-rose-600 hover:bg-rose-500 text-white text-xs font-semibold"
                         >
                           Couple ❤️
                         </button>
                         <button
                           type="button"
-                          onClick={() => {
-                            setSelectedMedia(item);
-                            setActiveRoomMode('group');
-                            navigateToTab('group-room', '/room/group/CLUB-4096');
-                          }}
+                          onClick={() => { void launchParty(item, 'group'); }}
                           className="flex-1 py-2 rounded-xl bg-violet-600 hover:bg-violet-500 text-white text-xs font-semibold"
                         >
                           Group 🎉
@@ -2044,9 +1983,7 @@ export default function App() {
             catalog={catalog}
             selectedMedia={selectedMedia}
             initialMode={activeTab === 'couple-room' ? 'couple' : 'group'}
-            initialRoomCode={
-              activeRoomCode || (activeTab === 'couple-room' ? 'LOVE-2026' : 'CLUB-4096')
-            }
+            initialRoomCode={activeRoomCode || undefined}
             userDisplayName={userProfile.displayName}
             onSelectMedia={(item) => setSelectedMedia(item)}
             onTriggerDownload={handleDownloadMedia}
@@ -2063,16 +2000,8 @@ export default function App() {
             isInWatchlist={likedIds.includes(selectedMedia.id)}
             onBack={() => navigateToTab('home', '/')}
             onWatchSolo={handleStartWatching}
-            onStartCoupleParty={(item) => {
-              setSelectedMedia(item);
-              setActiveRoomMode('couple');
-              navigateToTab('couple-room', '/room/couple/LOVE-2026');
-            }}
-            onStartGroupParty={(item) => {
-              setSelectedMedia(item);
-              setActiveRoomMode('group');
-              navigateToTab('group-room', '/room/group/CLUB-4096');
-            }}
+            onStartCoupleParty={(item) => { void launchParty(item, 'couple'); }}
+            onStartGroupParty={(item) => { void launchParty(item, 'group'); }}
             onToggleWatchlist={handleToggleWatchlist}
             onSelectMedia={(item) => setSelectedMedia(item)}
           />
@@ -2170,7 +2099,7 @@ export default function App() {
           <span>·</span>
           <button
             type="button"
-            onClick={() => navigateToTab('couple-room', '/room/couple/LOVE-2026')}
+            onClick={() => navigateToTab('create-party')}
             className="hover:text-white"
           >
             Couple Cinema ❤️
@@ -2178,7 +2107,7 @@ export default function App() {
           <span>·</span>
           <button
             type="button"
-            onClick={() => navigateToTab('group-room', '/room/group/CLUB-4096')}
+            onClick={() => navigateToTab('create-party')}
             className="hover:text-white"
           >
             Group Cinema 🎉
@@ -2221,7 +2150,7 @@ export default function App() {
         </button>
         <button
           type="button"
-          onClick={() => navigateToTab('couple-room', '/room/couple/LOVE-2026')}
+          onClick={() => navigateToTab('create-party')}
           className={`min-h-[44px] flex flex-col items-center justify-center text-[10px] font-medium ${
             activeTab === 'couple-room' ? 'text-rose-400' : 'text-slate-400'
           }`}
@@ -2231,7 +2160,7 @@ export default function App() {
         </button>
         <button
           type="button"
-          onClick={() => navigateToTab('group-room', '/room/group/CLUB-4096')}
+          onClick={() => navigateToTab('create-party')}
           className={`min-h-[44px] flex flex-col items-center justify-center text-[10px] font-medium ${
             activeTab === 'group-room' ? 'text-violet-400' : 'text-slate-400'
           }`}
