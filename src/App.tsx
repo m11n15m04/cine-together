@@ -1,4 +1,6 @@
 import React, { useEffect, useMemo, useState } from 'react';
+import { onAuthStateChanged } from 'firebase/auth';
+import { auth } from './lib/firebase';
 import {
   AlertCircle,
   Bell,
@@ -162,6 +164,30 @@ export default function App() {
       isGuest: true,
     };
   });
+
+  // Restore the Firebase account after Google redirect sign-in.
+  useEffect(() => {
+    if (!auth) return;
+    return onAuthStateChanged(auth, (firebaseUser) => {
+      if (!firebaseUser) return;
+      setUserProfile((previous) => {
+        const nextProfile: UserProfile = {
+          uid: firebaseUser.uid,
+          email: firebaseUser.email || previous.email,
+          displayName: firebaseUser.displayName || previous.displayName,
+          avatarUrl: firebaseUser.photoURL || previous.avatarUrl,
+          preferredTheme: previous.preferredTheme,
+          isGuest: false,
+        };
+        try {
+          window.localStorage.setItem('cinetogether_profile', JSON.stringify(nextProfile));
+        } catch {
+          // ignore unavailable browser storage
+        }
+        return nextProfile;
+      });
+    });
+  }, []);
 
   // Theme & Enhanced Night Viewing Mode
   const [themeMode, setThemeMode] = useState<'oled-dark' | 'daylight'>('oled-dark');
