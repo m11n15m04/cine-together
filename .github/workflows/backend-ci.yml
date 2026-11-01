@@ -4,7 +4,7 @@ on:
   pull_request:
     branches: [main]
   push:
-    branches: [codex/backend-database, codex/tmdb-integration, integration/frontend-polish]
+    branches: [codex/backend-database, codex/tmdb-integration, integration/frontend-polish, integration/nxsha-embed-player]
 
 permissions:
   contents: read

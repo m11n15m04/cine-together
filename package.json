@@ -17,7 +17,7 @@
     "lint": "tsc --noEmit -p tsconfig.json",
     "db:generate": "drizzle-kit generate --config=src/db/drizzle.config.ts",
     "db:migrate": "node scripts/db-migrate.mjs",
-    "test": "node --import tsx --test src/utils/streamEngine.test.ts src/security/tokens.test.ts src/services/mediaSources.test.ts src/services/catalogService.test.ts src/db/migrations.integration.test.ts src/db/repository.test.ts src/routes/api.test.ts src/realtime/partyHub.test.ts tests/playbackAndSync.test.ts tests/frontendUserJourney.test.ts tests/tmdbCatalogIntegration.test.ts"
+    "test": "node --import tsx --test src/utils/streamEngine.test.ts src/security/tokens.test.ts src/security/nxshaEmbedAccess.test.ts src/services/mediaSources.test.ts src/services/catalogService.test.ts src/db/migrations.integration.test.ts src/db/repository.test.ts src/routes/api.test.ts src/realtime/partyHub.test.ts tests/playbackAndSync.test.ts tests/frontendUserJourney.test.ts tests/tmdbCatalogIntegration.test.ts tests/nxshaEmbedIntegration.test.tsx"
   },
   "dependencies": {
     "@google/genai": "^2.4.0",
@@ -41,16 +41,18 @@
     "ws": "^8.22.0"
   },
   "devDependencies": {
+    "@types/express": "^4.17.21",
+    "@types/jsdom": "^30.0.0",
     "@types/node": "^22.14.0",
     "@types/react": "^19.3.0",
     "@types/react-dom": "^19.3.0",
     "autoprefixer": "^10.4.21",
+    "drizzle-kit": "^0.31.11",
     "esbuild": "^0.28.0",
+    "jsdom": "^26.1.0",
     "tailwindcss": "^4.3.3",
     "tsx": "^4.21.0",
-    "typescript": "^7.0.2",
-    "drizzle-kit": "^0.31.11",
-    "@types/express": "^4.17.21"
+    "typescript": "^7.0.2"
   },
   "overrides": {
     "@grpc/grpc-js": "1.14.7",

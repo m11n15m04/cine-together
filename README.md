@@ -48,6 +48,8 @@ Copy `.env.example` and configure only the features you use. TMDB catalog access
 | `GEMINI_API_KEY` | Optional server-side Gemini analysis, recommendations, and live voice companion. |
 | `TMDB_API_READ_ACCESS_TOKEN` | Server-only TMDB API v3 Read Access Token sent as `Authorization: Bearer …`. Required for live movie and TV metadata. Never expose it to Vite/browser code. |
 | `TMDB_REQUEST_TIMEOUT_MS` | Optional TMDB request timeout in milliseconds; defaults to 8000 and is capped at 60000. |
+| `NXSHA_EMBED_TEST_ENABLED` | Private Nxsha iframe trial kill switch. Defaults to disabled; enable only for private, personal-use testing while embedding and distribution permission is unresolved. |
+| `NXSHA_EMBED_TEST_ACCOUNT_UID` | The single Firebase UID permitted to use the private Nxsha iframe trial. Keep server-side; never use a `VITE_*` variable. |
 | `AUTHORIZED_MEDIA_SOURCES_JSON`, `AUTHORIZED_MEDIA_HOSTS` | Optional playback allowlist. Configure only sources CineTogether is authorized to play. Sources must use HTTPS (HTTP is allowed only for local development), match the allowlisted host, and end in `.mp4` or `.m3u8` for direct playback. External links use manual sync. |
 | `DATABASE_SSL_REJECT_UNAUTHORIZED`, `SQL_ADMIN_USER`, `SQL_ADMIN_PASSWORD`, `APP_URL`, `DISABLE_HMR` | Optional TLS, migration-role, application URL, and local development settings. |
 
@@ -111,6 +113,7 @@ All routes below are under `/api`. Successful responses are JSON; errors use `{ 
 | `GET /health` | Public | PostgreSQL readiness. Returns 503 when the database is unavailable. |
 | `GET /health/catalog`, `GET /catalog/status` | Public | TMDB metadata token configuration status. Returns 503 when the server token is missing. Reports Nxsha playback as a separate provider. |
 | `POST /auth/guest-session` | Public, rate limited | Creates a signed 24-hour guest session. Body: `{ "displayName": "..." }`. |
+| `GET /playback/nxsha/test-access` | Firebase-authenticated, rate limited | Indicates whether the signed-in account matches the single-account Nxsha player trial allowlist. The trial is disabled unless both server-side `NXSHA_EMBED_TEST_*` settings are configured. |
 | `GET /catalog/movies/popular?page=…`, `/catalog/movies/trending?window=day\|week`, `/catalog/movies/top-rated`, `/catalog/movies/now-playing`, `/catalog/movies/upcoming` | Public, rate limited | TMDB movie lists. Responses include `provider`, `state`, `items`, and pagination fields. |
 | `GET /catalog/movies/discover?page=…&genre=…&year=…` | Public, rate limited | TMDB movie discovery with validated genre ID and release year filters. |
 | `GET /catalog/movies/search?q=…&page=…&year=…` | Public, rate limited | TMDB movie search. Query length is 1–120 characters. |
@@ -151,7 +154,7 @@ TMDB is the only metadata provider for movie and TV discovery. The backend calls
 
 Migration 0001 created a short-lived Nxsha cache in the unmerged backend branch, and migration 0002 created the TMDB cache. Migration 0003 removes only `nxsha_catalog_cache` using `DROP TABLE IF EXISTS`; it does not alter user, watchlist, history, room, playback, or chat tables. This integration task does not apply migrations to production.
 
-Metadata records contain no synthesized playback links. Nxsha playback stays a separate integration: an embed is used only when a playback integration explicitly supplies embed and watch URLs. Otherwise the result remains metadata-only. Configured MP4/HLS or external sources are separately validated by the existing allowlist and availability contract. A TMDB ID or availability in TMDB never proves playback.
+Metadata records contain no synthesized playback links. Nxsha playback stays separate from TMDB metadata. A private, single-Firebase-account trial can open the published `https://nxsha.screenscape.me/embed` interface for a movie or explicitly selected TV episode. It is disabled unless `NXSHA_EMBED_TEST_ENABLED=true` and the signed-in UID matches `NXSHA_EMBED_TEST_ACCOUNT_UID`; guests and all other accounts remain excluded. Keep it disabled for public users until embedding and distribution permissions are confirmed. Constructing or loading the iframe never confirms that a title is playable; the app does not inspect or proxy cross-origin player content. Configured MP4/HLS or external sources are separately validated by the existing allowlist and availability contract. A TMDB ID or availability in TMDB never proves playback. See [Nxsha's published embed interface](https://nxsha.screenscape.me/embed).
 
 ## Tests and verification
 

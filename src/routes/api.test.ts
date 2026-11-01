@@ -59,6 +59,25 @@ test('private user endpoints reject requests without Firebase authentication', a
   });
 });
 
+test('Nxsha private player test access is not available without Firebase sign-in', async () => {
+  const previousEnabled = process.env.NXSHA_EMBED_TEST_ENABLED;
+  const previousAccountUid = process.env.NXSHA_EMBED_TEST_ACCOUNT_UID;
+  process.env.NXSHA_EMBED_TEST_ENABLED = 'true';
+  process.env.NXSHA_EMBED_TEST_ACCOUNT_UID = 'private-test-uid';
+  try {
+    await withApi(async (baseUrl) => {
+      const response = await fetch(baseUrl + '/playback/nxsha/test-access');
+      assert.equal(response.status, 401);
+      assert.deepEqual(await response.json(), { error: 'Sign-in is required.' });
+    });
+  } finally {
+    if (previousEnabled === undefined) delete process.env.NXSHA_EMBED_TEST_ENABLED;
+    else process.env.NXSHA_EMBED_TEST_ENABLED = previousEnabled;
+    if (previousAccountUid === undefined) delete process.env.NXSHA_EMBED_TEST_ACCOUNT_UID;
+    else process.env.NXSHA_EMBED_TEST_ACCOUNT_UID = previousAccountUid;
+  }
+});
+
 test('catalog metadata without an authorized source reports unavailable playback', async () => {
   await withApi(async (baseUrl) => {
     const response = await fetch(baseUrl + '/media/availability/metadata-only-film');

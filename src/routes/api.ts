@@ -19,6 +19,7 @@ import {
 } from '../db/repository.ts';
 import { requireActor, requireAuth, type AuthRequest } from '../middleware/auth.ts';
 import { createGuestSession, createRoomAccessToken } from '../security/tokens.ts';
+import { canUseNxshaEmbedTest } from '../security/nxshaEmbedAccess.ts';
 import { getAuthorizedMediaSource } from '../services/mediaSources.ts';
 import { TmdbCatalogError, tmdbCatalogService } from '../services/catalogService.ts';
 import type { createTmdbCatalogService } from '../services/catalogService.ts';
@@ -209,6 +210,14 @@ export function createApiRouter(catalog: CatalogService = tmdbCatalogService): R
     const name = text(bodyObject(req).displayName || 'Cinema Guest', 'displayName', 48);
     res.status(201).json({ data: createGuestSession(name) });
   }));
+
+  router.get('/playback/nxsha/test-access', authRateLimit, requireAuth, (req, res) => {
+    const uid = (req as AuthRequest).user?.uid;
+    return res.json({ enabled: canUseNxshaEmbedTest(uid, {
+      enabled: process.env.NXSHA_EMBED_TEST_ENABLED,
+      accountUid: process.env.NXSHA_EMBED_TEST_ACCOUNT_UID,
+    }) });
+  });
 
   router.get('/catalog/status', catalogRateLimit, (_req, res) => {
     const health = catalog.health();

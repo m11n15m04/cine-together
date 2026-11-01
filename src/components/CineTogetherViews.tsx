@@ -516,8 +516,9 @@ export const CreateJoinPartyView: React.FC<CreateJoinPartyViewProps> = ({
 interface MediaDetailViewProps {
   item: MediaItem;
   isInWatchlist: boolean;
+  canTryNxshaTestPlayer: boolean;
   onBack: () => void;
-  onWatchSolo: (item: MediaItem) => void;
+  onWatchSolo: (item: MediaItem, episode?: { season: number; episode: number }) => void;
   onStartCoupleParty: (item: MediaItem) => void;
   onStartGroupParty: (item: MediaItem) => void;
   onToggleWatchlist: (item: MediaItem) => void;
@@ -527,6 +528,7 @@ interface MediaDetailViewProps {
 export const MediaDetailView: React.FC<MediaDetailViewProps> = ({
   item,
   isInWatchlist,
+  canTryNxshaTestPlayer,
   onBack,
   onWatchSolo,
   onStartCoupleParty,
@@ -535,6 +537,7 @@ export const MediaDetailView: React.FC<MediaDetailViewProps> = ({
   onSelectMedia,
 }) => {
   const isEpisodic = item.mediaType === 'tv' || item.mediaType === 'anime';
+  const canTryNxshaForItem = canTryNxshaTestPlayer && (item.mediaType === 'movie' || item.mediaType === 'tv');
   const [seasons, setSeasons] = useState<TvSeasonDetail[]>([]);
   const [selectedSeasonNum, setSelectedSeasonNum] = useState<number>(1);
   const [selectedEpisodeNum, setSelectedEpisodeNum] = useState<number | null>(null);
@@ -675,7 +678,8 @@ export const MediaDetailView: React.FC<MediaDetailViewProps> = ({
     null;
 
   const buildEpisodicMediaItem = (_seasonNumber: number, _episodeNumber: number): MediaItem => item;
-  const playbackUnavailable = item.sourceAvailability === 'unavailable' || item.playbackStatus === 'metadata-only';
+  const playbackUnavailable = !canTryNxshaForItem
+    && (item.sourceAvailability === 'unavailable' || item.playbackStatus === 'metadata-only');
   const episodeMetadataUnavailable = isEpisodic && !currentEpisode;
 
   return (
@@ -779,9 +783,10 @@ export const MediaDetailView: React.FC<MediaDetailViewProps> = ({
                 if (playbackUnavailable || episodeMetadataUnavailable) {
                   return;
                 }
-                onWatchSolo(currentEpisode
-                  ? buildEpisodicMediaItem(currentEpisode.seasonNumber, currentEpisode.episodeNumber)
-                  : item);
+                onWatchSolo(
+                  currentEpisode ? buildEpisodicMediaItem(currentEpisode.seasonNumber, currentEpisode.episodeNumber) : item,
+                  currentEpisode ? { season: currentEpisode.seasonNumber, episode: currentEpisode.episodeNumber } : undefined,
+                );
               }}
               className={`inline-flex items-center gap-2 px-5 py-3 rounded-xl font-semibold text-xs sm:text-sm transition-colors shadow-lg ${
                 playbackUnavailable || episodeMetadataUnavailable
@@ -795,6 +800,8 @@ export const MediaDetailView: React.FC<MediaDetailViewProps> = ({
                   ? 'Playback unavailable'
                   : episodeMetadataUnavailable
                   ? 'Episode metadata unavailable'
+                  : canTryNxshaForItem
+                  ? 'Try Nxsha Player'
                   : isEpisodic && currentEpisode
                   ? `Watch S${currentEpisode.seasonNumber}·E${currentEpisode.episodeNumber} Now`
                   : 'Watch Solo Now'}
@@ -984,20 +991,23 @@ export const MediaDetailView: React.FC<MediaDetailViewProps> = ({
                   <div className="flex items-center gap-2">
                     <button
                       type="button"
-                      disabled={item.playbackStatus === 'metadata-only' || item.sourceAvailability === 'unavailable'}
+                      disabled={!canTryNxshaForItem && (item.playbackStatus === 'metadata-only' || item.sourceAvailability === 'unavailable')}
                       onClick={() =>
                         onWatchSolo(
                           buildEpisodicMediaItem(
                             currentEpisode.seasonNumber,
                             currentEpisode.episodeNumber
-                          )
+                          ),
+                          { season: currentEpisode.seasonNumber, episode: currentEpisode.episodeNumber },
                         )
                       }
                       className="px-3.5 py-2 rounded-xl bg-violet-600 hover:bg-violet-500 disabled:bg-slate-800 disabled:text-slate-500 text-white text-xs font-semibold"
                     >
-                      {item.playbackStatus === 'metadata-only' || item.sourceAvailability === 'unavailable'
+                      {!canTryNxshaForItem && (item.playbackStatus === 'metadata-only' || item.sourceAvailability === 'unavailable')
                         ? 'Playback unavailable'
-                        : `Play S${currentEpisode.seasonNumber}·E${currentEpisode.episodeNumber}`}
+                        : canTryNxshaForItem
+                          ? `Try S${currentEpisode.seasonNumber}·E${currentEpisode.episodeNumber}`
+                          : `Play S${currentEpisode.seasonNumber}·E${currentEpisode.episodeNumber}`}
                     </button>
                     {currentSeason.episodes.length > currentEpisode.episodeNumber && (
                       <button
@@ -1041,11 +1051,14 @@ export const MediaDetailView: React.FC<MediaDetailViewProps> = ({
                       </div>
                       <button
                         type="button"
-                        disabled={item.playbackStatus === 'metadata-only' || item.sourceAvailability === 'unavailable'}
+                      disabled={!canTryNxshaForItem && (item.playbackStatus === 'metadata-only' || item.sourceAvailability === 'unavailable')}
                         onClick={(e) => {
                           e.stopPropagation();
                           setSelectedEpisodeNum(ep.episodeNumber);
-                          onWatchSolo(buildEpisodicMediaItem(ep.seasonNumber, ep.episodeNumber));
+                          onWatchSolo(
+                            buildEpisodicMediaItem(ep.seasonNumber, ep.episodeNumber),
+                            { season: ep.seasonNumber, episode: ep.episodeNumber },
+                          );
                         }}
                         aria-label={`Play Season ${ep.seasonNumber} Episode ${ep.episodeNumber}`}
                         className="p-2 rounded-xl bg-violet-600/20 hover:bg-violet-600 text-violet-200 hover:text-white disabled:bg-slate-800 disabled:text-slate-500 disabled:cursor-not-allowed shrink-0 transition-colors"

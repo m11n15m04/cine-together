@@ -57,6 +57,7 @@ import { AdaptiveVideoPlayer } from './components/AdaptiveVideoPlayer';
 import { WatchPartyWorkspace } from './components/WatchPartyWorkspace';
 import { AiVoiceAndConcierge } from './components/AiVoiceAndConcierge';
 import { OfflineAndSocialWorkspace } from './components/OfflineAndSocialWorkspace';
+import { NxshaWatchModal, type NxshaPlaybackRequest } from './components/NxshaWatchModal';
 import {
   CreateJoinPartyView,
   MediaDetailView,
@@ -180,6 +181,15 @@ export default function App() {
   // Active Media & Inline Theater Modal State
   const [selectedMedia, setSelectedMedia] = useState<MediaItem | null>(null);
   const [isTheaterOpen, setIsTheaterOpen] = useState<boolean>(false);
+  const [nxshaEmbedTestEnabled, setNxshaEmbedTestEnabled] = useState<boolean>(false);
+  const [nxshaPlaybackRequest, setNxshaPlaybackRequest] = useState<NxshaPlaybackRequest | null>(null);
+  const [nxshaPlayerLanguage, setNxshaPlayerLanguage] = useState<string>(() => {
+    try {
+      return window.localStorage.getItem('cinetogether.nxsha-language.v1') || 'eng';
+    } catch {
+      return 'eng';
+    }
+  });
 
   // User Watch History & My List (Watchlist)
   const [watchHistory, setWatchHistory] = useState<WatchHistoryEntry[]>([]);
@@ -387,6 +397,23 @@ export default function App() {
     setNowPlayingMoviesLoading(false);
     setUpcomingMoviesLoading(false);
   };
+
+  useEffect(() => {
+    let active = true;
+    setNxshaEmbedTestEnabled(false);
+    if (userProfile.isGuest) return () => { active = false; };
+
+    apiFetch('/api/playback/nxsha/test-access')
+      .then(async (response) => response.ok ? response.json() as Promise<{ enabled?: boolean }> : null)
+      .then((data) => {
+        if (active) setNxshaEmbedTestEnabled(data?.enabled === true);
+      })
+      .catch(() => {
+        if (active) setNxshaEmbedTestEnabled(false);
+      });
+
+    return () => { active = false; };
+  }, [userProfile.isGuest, userProfile.uid]);
 
   useEffect(() => {
     if (userProfile.isGuest) return;
@@ -823,7 +850,13 @@ export default function App() {
     setCatalogPage(1);
   };
 
-  const handleStartWatching = (item: MediaItem) => {
+  const handleStartWatching = (item: MediaItem, episode?: { season: number; episode: number }) => {
+    if (nxshaEmbedTestEnabled && (item.mediaType === 'movie' || item.mediaType === 'tv')) {
+      setSelectedMedia(item);
+      setIsTheaterOpen(false);
+      setNxshaPlaybackRequest({ item, season: episode?.season, episode: episode?.episode });
+      return;
+    }
     if (item.playbackStatus !== 'synced-ready' && item.playbackStatus !== 'external-watch') {
       setSelectedMedia(item);
       setCatalogError('TMDB metadata does not confirm playback. No authorized playback source is configured for this title.');
@@ -2446,6 +2479,7 @@ export default function App() {
           <MediaDetailView
             item={selectedMedia}
             isInWatchlist={likedIds.includes(selectedMedia.id)}
+            canTryNxshaTestPlayer={nxshaEmbedTestEnabled}
             onBack={() => navigateToTab('home', '/')}
             onWatchSolo={handleStartWatching}
             onStartCoupleParty={(item) => {
@@ -2709,6 +2743,22 @@ export default function App() {
           <span>Profile</span>
         </button>
       </nav>
+
+      {nxshaPlaybackRequest && (
+        <NxshaWatchModal
+          request={nxshaPlaybackRequest}
+          language={nxshaPlayerLanguage}
+          onLanguageChange={(language) => {
+            setNxshaPlayerLanguage(language);
+            try {
+              window.localStorage.setItem('cinetogether.nxsha-language.v1', language);
+            } catch {
+              // Keep the in-memory preference when browser storage is unavailable.
+            }
+          }}
+          onClose={() => setNxshaPlaybackRequest(null)}
+        />
+      )}
     </div>
   );
 }
