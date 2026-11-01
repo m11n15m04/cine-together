@@ -114,7 +114,7 @@ export const OfflineAndSocialWorkspace: React.FC<OfflineAndSocialWorkspaceProps>
             <div className="flex items-center gap-2.5">
               <HardDrive className="w-5 h-5 text-amber-400" />
               <h2 className="text-xl font-display font-bold text-white">
-                01. Offline Playback Vault & Encrypted Local Storage
+                01. Offline Playback Vault & Local Cache
               </h2>
             </div>
             <p className="text-sm text-slate-400">
@@ -424,7 +424,7 @@ export const OfflineAndSocialWorkspace: React.FC<OfflineAndSocialWorkspaceProps>
             </div>
 
             <div className="p-3 rounded-lg bg-slate-950 border border-slate-800 flex items-center justify-between text-xs">
-              <span className="text-slate-400">Session Cryptographic Key:</span>
+              <span className="text-slate-400">Client Session Fingerprint:</span>
               <span className="font-mono text-emerald-400">{privacyFingerprint}</span>
             </div>
 
@@ -433,10 +433,10 @@ export const OfflineAndSocialWorkspace: React.FC<OfflineAndSocialWorkspaceProps>
               <label className="flex items-center justify-between p-3 rounded-lg bg-slate-950 border border-slate-800 cursor-pointer">
                 <div>
                   <div className="text-xs font-semibold text-white">
-                    E2E Encrypted Viewing History
+                    Private Local History Storage
                   </div>
                   <div className="text-[11px] text-slate-400">
-                    Zero-knowledge local encryption for recommendation weights
+                    Store viewing history locally in browser storage without cloud telemetry
                   </div>
                 </div>
                 <input
@@ -477,7 +477,7 @@ export const OfflineAndSocialWorkspace: React.FC<OfflineAndSocialWorkspaceProps>
               <label className="flex items-center justify-between p-3 rounded-lg bg-slate-950 border border-slate-800 cursor-pointer">
                 <div>
                   <div className="text-xs font-semibold text-white">
-                    DRM Stream & Couple Lounge PIN Lock
+                    Couple Lounge PIN Protection
                   </div>
                   <div className="text-[11px] text-slate-400">
                     Require 2-seat verification PIN before joining Couple Watch Party

@@ -139,7 +139,7 @@ export function computePersonalizedRecommendations(
     .map(([g]) => g);
 
   const scored: RecommendationResult[] = catalog.map((item, idx) => {
-    let rawScore = item.rating * 6.8; // base ~48..64
+    let rawScore = (item.rating ?? 0) * 6.8; // Uses the provider's rating when present.
     const matchedGenres: string[] = [];
 
     for (const g of item.genres) {
@@ -251,7 +251,9 @@ export function filterAndSearchCatalog(
     if (platform !== 'All Platforms' && item.platform !== platform) {
       return false;
     }
-    if (genre && genre !== 'All Genres' && !item.genres.includes(genre)) {
+    const genreId = Number(genre);
+    if (genre && genre !== 'All Genres' && !item.genres.includes(genre)
+      && !(Number.isSafeInteger(genreId) && item.genreIds?.includes(genreId))) {
       return false;
     }
     if (year && year !== 'All Years' && item.year !== year) {
@@ -260,7 +262,7 @@ export function filterAndSearchCatalog(
     if (language && language !== 'All Languages' && item.language !== language) {
       return false;
     }
-    if (item.rating < minRating) {
+    if (minRating > 0 && (item.rating === undefined || item.rating < minRating)) {
       return false;
     }
     if (!normalizedQuery) {
@@ -284,10 +286,10 @@ export function filterAndSearchCatalog(
   });
 
   if (sortBy === 'rating') {
-    return [...filtered].sort((a, b) => b.rating - a.rating);
+    return [...filtered].sort((a, b) => (b.rating ?? -Infinity) - (a.rating ?? -Infinity));
   }
   if (sortBy === 'release') {
-    return [...filtered].sort((a, b) => Number(b.year || 0) - Number(a.year || 0) || b.rating - a.rating);
+    return [...filtered].sort((a, b) => Number(b.year || 0) - Number(a.year || 0) || (b.rating ?? -Infinity) - (a.rating ?? -Infinity));
   }
   if (sortBy === 'title') {
     return [...filtered].sort((a, b) => a.title.localeCompare(b.title));

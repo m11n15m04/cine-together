@@ -4,7 +4,7 @@
     "experimentalDecorators": true,
     "useDefineForClassFields": false,
     "module": "ESNext",
-    "types": ["vite/client"],
+    "types": ["vite/client", "node"],
     "lib": [
       "ES2022",
       "DOM",
@@ -18,11 +18,13 @@
     "jsx": "react-jsx",
     "paths": {
       "@/*": [
+        "./src/*",
         "./*"
       ]
     },
     "allowImportingTsExtensions": true,
     "noEmit": true
   },
-  "exclude": ["dist"]
+  "include": ["src/**/*", "server.ts", "drizzle.config.ts", "vite.config.ts"],
+  "exclude": ["dist", "node_modules"]
 }

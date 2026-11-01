@@ -1,37 +1,36 @@
 import { defineConfig } from 'drizzle-kit';
-import * as dotenv from 'dotenv';
+import 'dotenv/config';
 
-dotenv.config();
+const url = process.env.DATABASE_URL?.trim() || process.env.POSTGRES_URL?.trim();
+const hasSplitConfig = Boolean(
+  process.env.SQL_HOST &&
+  process.env.SQL_DB_NAME &&
+  process.env.SQL_USER &&
+  process.env.SQL_PASSWORD
+);
 
-const sqlHost = process.env.SQL_HOST;
-const sqlDbName = process.env.SQL_DB_NAME;
-const user = process.env.SQL_ADMIN_USER;
-const password = process.env.SQL_ADMIN_PASSWORD;
-
-if (!sqlHost) {
-  throw new Error('SQL_HOST must be set in environment variables.');
-}
-if (!sqlDbName) {
-  throw new Error('SQL_DB_NAME must be set in environment variables.');
-}
-if (!user) {
-  throw new Error('SQL_ADMIN_USER must be set in environment variables.');
-}
-if (!password) {
-  throw new Error('SQL_ADMIN_PASSWORD must be set in environment variables.');
-}
+const dbCredentials = url
+  ? { url }
+  : hasSplitConfig
+  ? {
+      host: process.env.SQL_HOST!,
+      port: Number(process.env.SQL_PORT || 5432),
+      user: process.env.SQL_ADMIN_USER || process.env.SQL_USER!,
+      password: process.env.SQL_ADMIN_PASSWORD || process.env.SQL_PASSWORD!,
+      database: process.env.SQL_DB_NAME!,
+      ssl: process.env.DATABASE_SSL === 'require',
+    }
+  : undefined;
 
 export default defineConfig({
+  dialect: 'postgresql',
   schema: './src/db/schema.ts',
   out: './drizzle',
-  dialect: 'postgresql',
-  schemaFilter: ['public'],
-  dbCredentials: {
-    host: sqlHost,
-    user: user,
-    password: password,
-    database: sqlDbName,
-    ssl: false,
+  ...(dbCredentials ? { dbCredentials } : {}),
+  migrations: {
+    schema: 'drizzle',
+    table: '__drizzle_migrations',
   },
+  strict: true,
   verbose: true,
 });
