@@ -1,23 +1,26 @@
 # CineTogether backend audit
 
-Audited `main` at `8af79dd` on 2026-10-30 before implementation. The working branch is `codex/backend-database`.
+## Scope and source branches
 
-## Current architecture and data
+Compared PR #2 head 2767a7bd4b003a108d53eea9b0d5fa08aa678a97 (Nxsha-only catalog) with PR #3 head 716ff2d1a48f80131f5b67c096eefb7f839c5fc5 (TMDB catalog). The integration branch keeps PR #3 as its code baseline and retains the backend hardening present in both trees.
 
-- `server.ts` owns Express routes, catalog fetching, Gemini calls, static serving, and both WebSocket protocols. Drizzle operations live in `src/db/repository.ts`; the separate `src/services/catalogService.ts` provider implementation is not wired into the server.
-- `src/db/schema.ts` already defines profiles, media items, rooms, watchlists and items, room members, playback state, chat, reactions, votes, and watch sessions. Foreign keys exist for room-owned records, but watchlist membership and room membership lack uniqueness constraints. There is no migration directory or migration command.
-- Room state and password hashes live in process memory. Writes reach PostgreSQL, but startup does not hydrate rooms, members, chat, or playback from PostgreSQL. Watch history is insert-only; no history read or progress-update operation exists.
-- The server already binds `process.env.PORT` on `0.0.0.0`. `npm start` runs TypeScript directly with `node server.ts`; `npm run build` builds only the Vite client. There is no explicit Node version, health endpoint, migration step, Render manifest, or graceful shutdown handling.
+## Preserved backend hardening from PR #2
 
-## Findings
+- Express production server, centralized errors, request limits, health handling, static build serving, PORT and 0.0.0.0 binding, and the dist-server npm start command.
+- Firebase token verification, signed guest sessions, explicit public/private endpoint boundaries, request validation, and ownership checks using the authenticated actor.
+- PostgreSQL/Drizzle persistence for profiles, watchlists, watch history, rooms, members, playback, chat, reactions, and votes.
+- Room membership and host permission checks; public room listings include only online-member counts and do not expose private rooms.
+- WebSocket authorization, disconnect/reconnect handling, persisted playback revisions, and stale update protection.
+- Additive legacy-schema baseline, migration tooling outside production dependencies, and PostgreSQL-backed CI using Node 24 and PostgreSQL 16.
+- Authorized playback-source validation and the separate Nxsha manual-sync/embed adapter.
 
-1. **Frontend/backend routes do not match.** The UI calls `/api/health/catalog`, `/api/catalog/feed`, `/api/catalog/search`, `/api/media/stream/:id`, and `/api/gemini/quick-recap`; none are registered in `server.ts`. Existing routes use `/api/nxsha/*`. The catalog service contains TMDB and Nxsha functions but is not connected to an API router.
-2. **User identity and room access are not enforced.** `optionalAuth` accepts missing or invalid tokens as guests. Watchlist/profile APIs use caller-supplied IDs when no valid token is present. WebSocket joins trust client-supplied member IDs; room settings and member removal have no host check. The public room list returns complete in-memory room records, including messages and couple notes. Password verification is a separate HTTP check and is not enforced by WebSocket joins.
-3. **Persistence is incomplete.** The in-memory room map is authoritative and is not restored after restart. Room membership and messages cannot be loaded for reconnection. Watch history is only recorded, not queried or updated. The startup seeder inserts demo catalog and default rooms without an environment guard.
-4. **Database configuration and operations are incomplete.** `DATABASE_URL` is considered when reporting configuration but ignored by the `pg.Pool`; the Drizzle config also requires split `SQL_*` variables. The existing schema has no generated migrations, and deployment cannot safely migrate an existing database.
-5. **Playback is simulated.** The synced player renders a generated canvas animation. Catalog entries generate `/api/media/stream/...` URLs, but no such handler or authorized media-source registry exists. There is no real MP4/HLS selection or availability contract.
-6. **Production and validation gaps.** There is no central API error handler, structured request logging, rate limiting, or health route. The TypeScript project includes stale root-level copies alongside `src/`; some root imports resolve outside the repository. The README contains unresolved merge-conflict markers. A Firebase client configuration file with a project API key is tracked; client configuration should move to documented environment variables.
+## Integration decisions
 
-## Implementation focus
+- TMDB v3 is the only movie and TV metadata/discovery provider. The server sends TMDB_API_READ_ACCESS_TOKEN as a Bearer token; no Vite token is used.
+- Nxsha catalog discovery, search, seasons, and catalog cache methods are removed. Nxsha remains only as a separate authorized playback adapter.
+- TMDB responses use tmdb_catalog_cache with expiry. Historical migrations 0001 and 0002 remain unchanged; migration 0003 removes only nxsha_catalog_cache.
+- User, watchlist, history, room, playback, and chat tables are outside the cache migration and remain untouched.
 
-Keep the existing React experience and database tables; wire the catalog service into matching routes, add authenticated ownership and explicit guest behavior, persist and restore room state, add safe migrations and `DATABASE_URL` support, replace simulated playback with an authorized-source availability contract, and document/test the Render startup path. Existing data will be preserved; migration execution against a live database requires a configured database connection and will be reported separately.
+## Remaining verification
+
+Run the integration-branch workflow against its disposable PostgreSQL 16 service. Do not apply migrations to production or deploy this branch to production. Live TMDB requests require TMDB_API_READ_ACCESS_TOKEN in a non-production service environment.
