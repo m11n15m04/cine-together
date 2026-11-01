@@ -23,7 +23,7 @@ import {
   UserCheck,
   Users,
 } from 'lucide-react';
-import { signInWithPopup, signOut } from 'firebase/auth';
+import { signInWithRedirect, signOut } from 'firebase/auth';
 import { auth, googleAuthProvider } from '../lib/firebase';
 import {
   BRAND_CONFIG,
@@ -1188,23 +1188,16 @@ export const ProfileAndAuthView: React.FC<ProfileAndAuthViewProps> = ({
       return;
     }
     try {
-      const cred = await signInWithPopup(auth, googleAuthProvider);
-      if (cred.user) {
-        const nextProfile: UserProfile = {
-          uid: cred.user.uid,
-          email: cred.user.email || 'member@cinetogether.app',
-          displayName: cred.user.displayName || 'CineTogether Member',
-          avatarUrl: cred.user.photoURL || undefined,
-          preferredTheme,
-          isGuest: false,
-        };
-        setDisplayName(nextProfile.displayName);
-        setEmail(nextProfile.email);
-        onUpdateProfile(nextProfile);
-      }
-    } catch {
+      // A full-page redirect avoids Safari and embedded-preview popup blockers.
+      await signInWithRedirect(auth, googleAuthProvider);
+    } catch (error) {
+      const code = typeof error === 'object' && error !== null && 'code' in error
+        ? String((error as { code?: unknown }).code || '')
+        : '';
       setAuthError(
-        'Popup sign-in was cancelled or blocked by preview sandbox. You can continue seamlessly with your Instant Cinema Profile below.'
+        code
+          ? `Google sign-in could not start (${code}). Check Firebase Authorized Domains and the Auth Domain configuration.`
+          : 'Google sign-in could not start. Check Firebase Authorized Domains and try again.'
       );
     }
   };
