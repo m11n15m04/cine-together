@@ -6,6 +6,10 @@ interface MediaPosterProps {
   item: MediaItem;
   variant?: 'poster' | 'backdrop';
   className?: string;
+  /** Prioritize the artwork that defines the current hero or detail view. */
+  priority?: boolean;
+  /** Load important artwork eagerly without elevating its network priority. */
+  eager?: boolean;
 }
 
 /** Shows provider artwork when present and a neutral placeholder when TMDB has none. */
@@ -13,6 +17,8 @@ export const MediaPoster: React.FC<MediaPosterProps> = ({
   item,
   variant = 'poster',
   className = '',
+  priority = false,
+  eager = false,
 }) => {
   const [imgError, setImgError] = useState(false);
   const imageUrl = variant === 'backdrop'
@@ -30,7 +36,9 @@ export const MediaPoster: React.FC<MediaPosterProps> = ({
         <img
           src={imageUrl}
           alt={accessibleTitle}
-          loading="lazy"
+          loading={priority || eager ? 'eager' : 'lazy'}
+          fetchPriority={priority ? 'high' : 'auto'}
+          decoding="async"
           onError={() => setImgError(true)}
           className="w-full h-full object-cover block"
         />

@@ -107,6 +107,7 @@ export default function App() {
   const [catalogBackendPage, setCatalogBackendPage] = useState<number>(1);
   const [catalogBackendHasMore, setCatalogBackendHasMore] = useState<boolean>(true);
   const [catalogLoadingMore, setCatalogLoadingMore] = useState<boolean>(false);
+  const [catalogLoadMoreError, setCatalogLoadMoreError] = useState<string | null>(null);
 
   // Independent feeds for homepage sections
   const [trendingFeed, setTrendingFeed] = useState<MediaItem[]>([]);
@@ -118,6 +119,9 @@ export default function App() {
   const [trendingLoading, setTrendingLoading] = useState<boolean>(false);
   const [popularMoviesLoading, setPopularMoviesLoading] = useState<boolean>(false);
   const [popularTvLoading, setPopularTvLoading] = useState<boolean>(false);
+  const [topRatedMoviesLoading, setTopRatedMoviesLoading] = useState<boolean>(false);
+  const [nowPlayingMoviesLoading, setNowPlayingMoviesLoading] = useState<boolean>(false);
+  const [upcomingMoviesLoading, setUpcomingMoviesLoading] = useState<boolean>(false);
   const [genreOptions, setGenreOptions] = useState<Array<{ id: number; name: string }>>([]);
 
   // Server health state
@@ -297,7 +301,11 @@ export default function App() {
     setTrendingLoading(true);
     setPopularMoviesLoading(true);
     setPopularTvLoading(true);
+    setTopRatedMoviesLoading(true);
+    setNowPlayingMoviesLoading(true);
+    setUpcomingMoviesLoading(true);
     setCatalogError(null);
+    setCatalogLoadMoreError(null);
     setIsProviderUnavailable(false);
     setProviderErrorCode(null);
     setCatalog([]);
@@ -375,6 +383,9 @@ export default function App() {
     setTrendingLoading(false);
     setPopularMoviesLoading(false);
     setPopularTvLoading(false);
+    setTopRatedMoviesLoading(false);
+    setNowPlayingMoviesLoading(false);
+    setUpcomingMoviesLoading(false);
   };
 
   useEffect(() => {
@@ -437,6 +448,7 @@ export default function App() {
   const handleLoadMoreCatalog = async () => {
     if (catalogLoadingMore) return;
     setCatalogLoadingMore(true);
+    setCatalogLoadMoreError(null);
     const nextPage = catalogBackendPage + 1;
     try {
       let path = catalogFeedPath(nextPage);
@@ -460,7 +472,7 @@ export default function App() {
         setCatalogBackendHasMore(false);
       }
     } catch (error) {
-      setCatalogError(error instanceof Error ? error.message : 'TMDB could not load more titles. Retry the request.');
+      setCatalogLoadMoreError(error instanceof Error ? error.message : 'TMDB could not load more titles. Retry the request.');
     } finally {
       setCatalogLoadingMore(false);
     }
@@ -479,6 +491,7 @@ export default function App() {
     setLiveSearchLoading(true);
     setCatalogLoading(true);
     setCatalogError(null);
+    setCatalogLoadMoreError(null);
     const timer = setTimeout(() => {
       const params = new URLSearchParams({
         q: query,
@@ -1338,6 +1351,7 @@ export default function App() {
                   <MediaPoster
                     item={selectedMedia}
                     variant="backdrop"
+                    priority
                     className="w-full h-full object-cover"
                   />
                   <div className="absolute inset-0 bg-gradient-to-t from-slate-950 via-transparent to-transparent pointer-events-none lg:hidden" />
@@ -1555,6 +1569,7 @@ export default function App() {
                   badge="Masterpieces"
                   items={topRatedMovies}
                   likedIds={likedIds}
+                  isLoading={topRatedMoviesLoading}
                   onOpenDetails={handleOpenMediaDetail}
                   onStartWatching={handleStartWatching}
                   onToggleWatchlist={handleToggleWatchlist}
@@ -1578,6 +1593,7 @@ export default function App() {
                   badge="New Arrivals"
                   items={recentlyReleased}
                   likedIds={likedIds}
+                  isLoading={nowPlayingMoviesLoading}
                   onOpenDetails={handleOpenMediaDetail}
                   onStartWatching={handleStartWatching}
                   onToggleWatchlist={handleToggleWatchlist}
@@ -1601,6 +1617,7 @@ export default function App() {
                   badge="Coming Soon"
                   items={upcomingMovies}
                   likedIds={likedIds}
+                  isLoading={upcomingMoviesLoading}
                   onOpenDetails={handleOpenMediaDetail}
                   onStartWatching={handleStartWatching}
                   onToggleWatchlist={handleToggleWatchlist}
@@ -2246,6 +2263,18 @@ export default function App() {
                   {/* Progressive Catalog Pagination ("Load More") */}
                   {(paginatedCatalog.hasMore || catalogBackendHasMore) && (
                     <div className="pt-4 flex flex-col items-center gap-2">
+                      {catalogLoadMoreError && (
+                        <div className="flex flex-wrap items-center justify-center gap-3 rounded-xl border border-rose-500/30 bg-rose-950/30 px-4 py-3 text-center">
+                          <p role="alert" className="text-xs text-rose-200">{catalogLoadMoreError}</p>
+                          <button
+                            type="button"
+                            onClick={() => void handleLoadMoreCatalog()}
+                            className="rounded-lg bg-rose-600 px-3 py-1.5 text-xs font-semibold text-white transition-colors hover:bg-rose-500"
+                          >
+                            Retry
+                          </button>
+                        </div>
+                      )}
                       {catalogLoadingMore ? (
                         <div className="inline-flex items-center gap-2 px-6 py-3 rounded-2xl bg-slate-900 border border-violet-500/40 text-xs sm:text-sm font-semibold text-violet-300">
                           <RefreshCw className="w-4 h-4 animate-spin text-violet-400" />

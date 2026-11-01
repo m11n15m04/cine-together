@@ -191,7 +191,7 @@ function normalizeSeason(raw: TmdbRecord, seasonNumber: number): TvSeasonDetail 
       episodeNumber: numberValue(episode.episode_number) || 0,
       title: stringValue(episode.name),
       overview: stringValue(episode.overview),
-      durationMinutes: numberValue(episode.runtime) || 0,
+      durationMinutes: numberValue(episode.runtime),
       airDate: stringValue(episode.air_date),
       stillUrl: imageUrl(episode.still_path, 'w500'),
     }));

@@ -4,7 +4,7 @@ on:
   pull_request:
     branches: [main]
   push:
-    branches: [codex/backend-database, codex/tmdb-integration]
+    branches: [codex/backend-database, codex/tmdb-integration, integration/frontend-polish]
 
 permissions:
   contents: read

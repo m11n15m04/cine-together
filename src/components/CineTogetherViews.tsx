@@ -1,4 +1,4 @@
-import React, { useEffect, useState } from 'react';
+import React, { useCallback, useEffect, useState } from 'react';
 import {
   ArrowLeft,
   Bookmark,
@@ -537,8 +537,10 @@ export const MediaDetailView: React.FC<MediaDetailViewProps> = ({
   const isEpisodic = item.mediaType === 'tv' || item.mediaType === 'anime';
   const [seasons, setSeasons] = useState<TvSeasonDetail[]>([]);
   const [selectedSeasonNum, setSelectedSeasonNum] = useState<number>(1);
-  const [selectedEpisodeNum, setSelectedEpisodeNum] = useState<number>(1);
+  const [selectedEpisodeNum, setSelectedEpisodeNum] = useState<number | null>(null);
   const [episodesLoading, setEpisodesLoading] = useState<boolean>(false);
+  const [seasonMetadataError, setSeasonMetadataError] = useState<string | null>(null);
+  const [episodeMetadataError, setEpisodeMetadataError] = useState<string | null>(null);
   const [episodeSourceLabel, setEpisodeSourceLabel] = useState<string>('');
   const [copiedShare, setCopiedShare] = useState<boolean>(false);
   const [relatedItems, setRelatedItems] = useState<MediaItem[]>([]);
@@ -581,61 +583,89 @@ export const MediaDetailView: React.FC<MediaDetailViewProps> = ({
     }
   };
 
-  const loadSeasonEpisodes = async (seasonNumber: number) => {
+  const loadSeasonEpisodes = useCallback(async (seasonNumber: number, signal?: AbortSignal) => {
     setEpisodesLoading(true);
+    setEpisodeMetadataError(null);
     try {
       const response = await fetch(
-        '/api/catalog/tv/' + encodeURIComponent(String(item.tmdbId)) + '/seasons/' + seasonNumber + '/episodes'
+        '/api/catalog/tv/' + encodeURIComponent(String(item.tmdbId)) + '/seasons/' + seasonNumber + '/episodes',
+        { signal }
       );
-      const data = await response.json().catch(() => null) as { season?: TvSeasonDetail } | null;
-      if (!response.ok || !data?.season) throw new Error('Season metadata unavailable');
+      const data = await response.json().catch(() => null) as { season?: TvSeasonDetail; error?: string } | null;
+      if (!response.ok || !data?.season || !Array.isArray(data.season.episodes)) {
+        throw new Error(data?.error || 'TMDB episode metadata is unavailable. Retry the request.');
+      }
+      if (signal?.aborted) return;
       setSeasons((current) => current.map((season) => season.seasonNumber === seasonNumber ? data.season! : season));
-      setSelectedEpisodeNum(data.season.episodes[0]?.episodeNumber || 1);
+      setSelectedEpisodeNum(data.season.episodes[0]?.episodeNumber ?? null);
       setEpisodeSourceLabel('TMDB series metadata');
-    } catch {
-      setEpisodeSourceLabel('Episode metadata is currently unavailable.');
+    } catch (error) {
+      if (!signal?.aborted) {
+        const message = error instanceof Error ? error.message : 'TMDB episode metadata is unavailable. Retry the request.';
+        setEpisodeMetadataError(message);
+        setEpisodeSourceLabel('Episode metadata is currently unavailable.');
+      }
     } finally {
-      setEpisodesLoading(false);
+      if (!signal?.aborted) setEpisodesLoading(false);
     }
-  };
+  }, [item.tmdbId]);
+
+  const loadSeasonMetadata = useCallback(async (signal?: AbortSignal) => {
+    setEpisodesLoading(true);
+    setSeasonMetadataError(null);
+    setEpisodeMetadataError(null);
+    try {
+      const response = await fetch(
+        '/api/catalog/tv/' + encodeURIComponent(String(item.tmdbId)) + '/seasons',
+        { signal }
+      );
+      const data = await response.json().catch(() => null) as {
+        seasons?: Array<Omit<TvSeasonDetail, 'episodes'>>;
+        error?: string;
+      } | null;
+      if (!response.ok || !Array.isArray(data?.seasons)) {
+        throw new Error(data?.error || 'TMDB season metadata is unavailable. Retry the request.');
+      }
+      if (signal?.aborted) return;
+      const list: TvSeasonDetail[] = data.seasons
+        .filter((season) => season.seasonNumber > 0)
+        .map((season) => ({ ...season, episodes: [] }));
+      setSeasons(list);
+      const firstSeason = list[0];
+      if (firstSeason) {
+        setSelectedSeasonNum(firstSeason.seasonNumber);
+        await loadSeasonEpisodes(firstSeason.seasonNumber, signal);
+      } else {
+        setSelectedEpisodeNum(null);
+        setEpisodeSourceLabel('TMDB returned no season metadata for this series.');
+      }
+    } catch (error) {
+      if (!signal?.aborted) {
+        const message = error instanceof Error ? error.message : 'TMDB season metadata is unavailable. Retry the request.';
+        setSeasonMetadataError(message);
+        setEpisodeSourceLabel('Season metadata is currently unavailable.');
+      }
+    } finally {
+      if (!signal?.aborted) setEpisodesLoading(false);
+    }
+  }, [item.tmdbId, loadSeasonEpisodes]);
 
   useEffect(() => {
     if (!isEpisodic) {
       setSeasons([]);
+      setSeasonMetadataError(null);
+      setEpisodeMetadataError(null);
+      setEpisodesLoading(false);
       return;
     }
-    let active = true;
-    setEpisodesLoading(true);
-    setSelectedSeasonNum(1);
-    setSelectedEpisodeNum(1);
-
-    fetch('/api/catalog/tv/' + encodeURIComponent(String(item.tmdbId)) + '/seasons')
-      .then(async (response) => {
-        const data = await response.json().catch(() => null) as { seasons?: Array<Omit<TvSeasonDetail, 'episodes'>> } | null;
-        if (!response.ok || !Array.isArray(data?.seasons)) throw new Error('TMDB series metadata unavailable');
-        const list: TvSeasonDetail[] = data.seasons
-          .filter((season) => season.seasonNumber > 0)
-          .map((season) => ({ ...season, episodes: [] }));
-        if (!active) return;
-        setSeasons(list);
-        const firstSeason = list[0];
-        if (firstSeason) {
-          setSelectedSeasonNum(firstSeason.seasonNumber);
-          await loadSeasonEpisodes(firstSeason.seasonNumber);
-        }
-        setEpisodeSourceLabel('TMDB series metadata');
-      })
-      .catch(() => {
-        if (active) setEpisodeSourceLabel('TMDB season metadata is unavailable.');
-      })
-      .finally(() => {
-        if (active) setEpisodesLoading(false);
-      });
-
-    return () => {
-      active = false;
-    };
-  }, [item.tmdbId, isEpisodic]);
+    const controller = new AbortController();
+    setSeasons([]);
+    setSelectedSeasonNum(0);
+    setSelectedEpisodeNum(null);
+    setEpisodeSourceLabel('');
+    void loadSeasonMetadata(controller.signal);
+    return () => controller.abort();
+  }, [item.tmdbId, isEpisodic, loadSeasonMetadata]);
 
   const currentSeason =
     seasons.find((s) => s.seasonNumber === selectedSeasonNum) || seasons[0] || null;
@@ -645,6 +675,8 @@ export const MediaDetailView: React.FC<MediaDetailViewProps> = ({
     null;
 
   const buildEpisodicMediaItem = (_seasonNumber: number, _episodeNumber: number): MediaItem => item;
+  const playbackUnavailable = item.sourceAvailability === 'unavailable' || item.playbackStatus === 'metadata-only';
+  const episodeMetadataUnavailable = isEpisodic && !currentEpisode;
 
   return (
     <section className="space-y-8" aria-label={`${item.title} Details`}>
@@ -659,14 +691,14 @@ export const MediaDetailView: React.FC<MediaDetailViewProps> = ({
 
       <div className="relative rounded-3xl overflow-hidden border border-slate-800 bg-slate-900">
         <div className="aspect-[21/9] min-h-[300px] max-h-[440px] w-full relative">
-          <MediaPoster item={item} variant="backdrop" className="w-full h-full" />
+          <MediaPoster item={item} variant="backdrop" priority className="w-full h-full" />
           <div className="absolute inset-0 bg-gradient-to-r from-slate-950 via-slate-950/85 to-transparent" />
         </div>
 
         <div className="p-6 sm:p-10 relative -mt-36 sm:-mt-48 z-10 flex flex-col md:flex-row items-start gap-8">
           {/* Vertical Poster Card */}
           <div className="w-44 sm:w-56 shrink-0 aspect-[2/3] rounded-2xl overflow-hidden shadow-2xl border-2 border-white/10 bg-slate-950 hidden sm:block">
-            <MediaPoster item={item} variant="poster" className="w-full h-full object-cover" />
+            <MediaPoster item={item} variant="poster" eager className="w-full h-full object-cover" />
           </div>
 
           <div className="flex-1 max-w-3xl space-y-5 min-w-0">
@@ -688,7 +720,9 @@ export const MediaDetailView: React.FC<MediaDetailViewProps> = ({
             <span className="text-slate-300">
               {item.mediaType === 'movie'
                 ? item.durationMinutes === undefined ? 'Runtime unavailable' : `${item.durationMinutes}m`
-                : `${seasons.length || item.seasons || 1} Seasons`}
+                : item.seasons !== undefined
+                  ? `${item.seasons} Seasons`
+                  : seasons.length > 0 ? `${seasons.length} Seasons` : 'Season count unavailable'}
             </span>
             {item.coupleScore && (
               <span className="px-2.5 py-0.5 rounded-full bg-rose-500/20 text-rose-300 border border-rose-500/30">
@@ -740,25 +774,29 @@ export const MediaDetailView: React.FC<MediaDetailViewProps> = ({
           <div className="flex flex-wrap items-center gap-3 pt-2">
             <button
               type="button"
-              disabled={item.sourceAvailability === 'unavailable' || item.playbackStatus === 'metadata-only'}
+              disabled={playbackUnavailable || episodeMetadataUnavailable}
               onClick={() => {
-                if (item.sourceAvailability === 'unavailable' || item.playbackStatus === 'metadata-only') {
+                if (playbackUnavailable || episodeMetadataUnavailable) {
                   return;
                 }
-                onWatchSolo(buildEpisodicMediaItem(selectedSeasonNum, selectedEpisodeNum));
+                onWatchSolo(currentEpisode
+                  ? buildEpisodicMediaItem(currentEpisode.seasonNumber, currentEpisode.episodeNumber)
+                  : item);
               }}
               className={`inline-flex items-center gap-2 px-5 py-3 rounded-xl font-semibold text-xs sm:text-sm transition-colors shadow-lg ${
-                item.sourceAvailability === 'unavailable' || item.playbackStatus === 'metadata-only'
+                playbackUnavailable || episodeMetadataUnavailable
                   ? 'bg-slate-800 text-slate-500 cursor-not-allowed border border-slate-700'
                   : 'bg-white hover:bg-slate-200 text-slate-950'
               }`}
             >
               <Play className="w-4 h-4 fill-current" />
               <span>
-                {item.sourceAvailability === 'unavailable' || item.playbackStatus === 'metadata-only'
+                {playbackUnavailable
                   ? 'Playback unavailable'
-                  : isEpisodic
-                  ? `Watch S${selectedSeasonNum}·E${selectedEpisodeNum} Now`
+                  : episodeMetadataUnavailable
+                  ? 'Episode metadata unavailable'
+                  : isEpisodic && currentEpisode
+                  ? `Watch S${currentEpisode.seasonNumber}·E${currentEpisode.episodeNumber} Now`
                   : 'Watch Solo Now'}
               </span>
             </button>
@@ -766,7 +804,9 @@ export const MediaDetailView: React.FC<MediaDetailViewProps> = ({
             <button
               type="button"
               onClick={() =>
-                onStartCoupleParty(buildEpisodicMediaItem(selectedSeasonNum, selectedEpisodeNum))
+                onStartCoupleParty(currentEpisode
+                  ? buildEpisodicMediaItem(currentEpisode.seasonNumber, currentEpisode.episodeNumber)
+                  : item)
               }
               className="inline-flex items-center gap-2 px-5 py-3 rounded-xl bg-gradient-to-r from-rose-500 to-pink-600 hover:from-rose-400 hover:to-pink-500 text-white font-semibold text-xs sm:text-sm transition-all shadow-lg"
             >
@@ -777,7 +817,9 @@ export const MediaDetailView: React.FC<MediaDetailViewProps> = ({
             <button
               type="button"
               onClick={() =>
-                onStartGroupParty(buildEpisodicMediaItem(selectedSeasonNum, selectedEpisodeNum))
+                onStartGroupParty(currentEpisode
+                  ? buildEpisodicMediaItem(currentEpisode.seasonNumber, currentEpisode.episodeNumber)
+                  : item)
               }
               className="inline-flex items-center gap-2 px-5 py-3 rounded-xl bg-gradient-to-r from-violet-600 to-indigo-600 hover:from-violet-500 hover:to-indigo-500 text-white font-semibold text-xs sm:text-sm transition-all shadow-lg"
             >
@@ -853,7 +895,9 @@ export const MediaDetailView: React.FC<MediaDetailViewProps> = ({
               <div className="flex items-center gap-2">
                 <Tv className="w-5 h-5 text-violet-400" />
                 <h2 className="text-lg font-display font-bold text-white">
-                  Seasons &amp; Episodes ({seasons.length || item.seasons || 1} Seasons)
+                  Seasons &amp; Episodes {item.seasons !== undefined
+                    ? `(${item.seasons} Seasons)`
+                    : seasons.length > 0 ? `(${seasons.length} Seasons)` : '(Season count unavailable)'}
                 </h2>
               </div>
               <p className="text-xs text-slate-400 mt-0.5">
@@ -869,7 +913,9 @@ export const MediaDetailView: React.FC<MediaDetailViewProps> = ({
                   type="button"
                   onClick={() => {
                     setSelectedSeasonNum(season.seasonNumber);
-                    setSelectedEpisodeNum(season.episodes?.[0]?.episodeNumber || 1);
+                    setSelectedEpisodeNum(season.episodes?.[0]?.episodeNumber ?? null);
+                    setEpisodeMetadataError(null);
+                    if (season.episodes.length === 0) void loadSeasonEpisodes(season.seasonNumber);
                   }}
                   className={`px-3.5 py-1.5 rounded-xl text-xs font-semibold border transition-all ${
                     selectedSeasonNum === season.seasonNumber
@@ -883,6 +929,23 @@ export const MediaDetailView: React.FC<MediaDetailViewProps> = ({
             </div>
           </div>
 
+          {seasonMetadataError && (
+            <div className="flex flex-wrap items-center justify-between gap-3 rounded-xl border border-rose-500/30 bg-rose-950/30 px-4 py-3">
+              <p role="alert" className="text-xs text-rose-200">{seasonMetadataError}</p>
+              <button
+                type="button"
+                onClick={() => void loadSeasonMetadata()}
+                className="rounded-lg bg-rose-600 px-3 py-1.5 text-xs font-semibold text-white transition-colors hover:bg-rose-500"
+              >
+                Retry seasons
+              </button>
+            </div>
+          )}
+
+          {!episodesLoading && !seasonMetadataError && seasons.length === 0 && (
+            <p role="status" className="text-xs text-slate-400">TMDB does not list season metadata for this series.</p>
+          )}
+
           {episodesLoading ? (
             <div className="grid grid-cols-1 md:grid-cols-2 gap-3">
               {[1, 2, 3, 4].map((skeleton) => (
@@ -894,6 +957,18 @@ export const MediaDetailView: React.FC<MediaDetailViewProps> = ({
             </div>
           ) : currentSeason ? (
             <>
+              {episodeMetadataError && (
+                <div className="flex flex-wrap items-center justify-between gap-3 rounded-xl border border-rose-500/30 bg-rose-950/30 px-4 py-3">
+                  <p role="alert" className="text-xs text-rose-200">{episodeMetadataError}</p>
+                  <button
+                    type="button"
+                    onClick={() => void loadSeasonEpisodes(currentSeason.seasonNumber)}
+                    className="rounded-lg bg-rose-600 px-3 py-1.5 text-xs font-semibold text-white transition-colors hover:bg-rose-500"
+                  >
+                    Retry episodes
+                  </button>
+                </div>
+              )}
               {currentEpisode && (
                 <div className="p-4 rounded-2xl bg-violet-950/25 border border-violet-500/30 flex flex-wrap items-center justify-between gap-4">
                   <div className="space-y-1 max-w-2xl">

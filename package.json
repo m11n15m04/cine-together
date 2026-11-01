@@ -17,7 +17,7 @@
     "lint": "tsc --noEmit -p tsconfig.json",
     "db:generate": "drizzle-kit generate --config=src/db/drizzle.config.ts",
     "db:migrate": "node scripts/db-migrate.mjs",
-    "test": "node --import tsx --test src/utils/streamEngine.test.ts src/security/tokens.test.ts src/services/mediaSources.test.ts src/services/catalogService.test.ts src/db/migrations.integration.test.ts src/db/repository.test.ts src/routes/api.test.ts src/realtime/partyHub.test.ts tests/playbackAndSync.test.ts tests/frontendUserJourney.test.ts"
+    "test": "node --import tsx --test src/utils/streamEngine.test.ts src/security/tokens.test.ts src/services/mediaSources.test.ts src/services/catalogService.test.ts src/db/migrations.integration.test.ts src/db/repository.test.ts src/routes/api.test.ts src/realtime/partyHub.test.ts tests/playbackAndSync.test.ts tests/frontendUserJourney.test.ts tests/tmdbCatalogIntegration.test.ts"
   },
   "dependencies": {
     "@google/genai": "^2.4.0",
