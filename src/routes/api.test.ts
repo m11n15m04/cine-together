@@ -134,6 +134,17 @@ test('TMDB movie search returns real metadata and keeps the token server-side', 
   assert.equal(authorization, 'Bearer server-only-token');
 });
 
+test('Nxsha catalog discovery routes are not registered', async () => {
+  await withApi(async (baseUrl) => {
+    const feed = await fetch(baseUrl + '/nxsha/feed');
+    const search = await fetch(baseUrl + '/nxsha/search?q=matrix');
+    const seasons = await fetch(baseUrl + '/nxsha/tv/123/seasons');
+    assert.equal(feed.status, 404);
+    assert.equal(search.status, 404);
+    assert.equal(seasons.status, 404);
+  });
+});
+
 test('catalog health reports TMDB metadata status and Nxsha playback separately', async () => {
   await withApi(async (baseUrl) => {
     const response = await fetch(baseUrl + '/health/catalog');

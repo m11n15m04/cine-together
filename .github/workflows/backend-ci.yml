@@ -4,7 +4,7 @@ on:
   pull_request:
     branches: [main]
   push:
-    branches: [codex/backend-database]
+    branches: [codex/backend-database, codex/tmdb-integration]
 
 permissions:
   contents: read
@@ -39,8 +39,13 @@ jobs:
           node-version-file: .node-version
           cache: npm
       - run: npm ci
-      - run: npm audit --omit=dev --audit-level=moderate
+      - run: npm audit --audit-level=moderate
       - run: psql "$DATABASE_URL" -v ON_ERROR_STOP=1 -f tests/legacy-schema.sql
       - run: npm run db:migrate
+      - name: Verify obsolete catalog cache was removed
+        shell: bash
+        run: |
+          result="$(psql "$DATABASE_URL" -Atc "SELECT to_regclass('public.nxsha_catalog_cache') IS NULL")"
+          test "$result" = "t"
       - run: npm run lint
       - run: npm test

@@ -59,7 +59,6 @@ Drizzle schema definitions are in [`src/db/schema.ts`](src/db/schema.ts). The da
 
 - `profiles` — Firebase UID, email, display name, theme, preferences, timestamps.
 - `media_items` — catalog metadata; no playback URLs.
-- `nxsha_catalog_cache` — legacy cache table retained for compatibility; the TMDB integration does not read or write it.
 - `tmdb_catalog_cache` — TMDB JSON API payloads keyed by a SHA-256 digest, with refresh and expiry timestamps. Short TTLs are used for search/list data and longer TTLs for details and genres.
 - `watchlists` and `watchlist_items` — per-user saved titles with uniqueness constraints.
 - `watch_rooms` and `room_members` — room configuration, host, status, membership, connection and ban state.
@@ -132,7 +131,7 @@ All routes below are under `/api`. Successful responses are JSON; errors use `{ 
 
 ### Catalog contract migration
 
-The former `/nxsha/feed`, `/nxsha/search`, and `/nxsha/tv/:providerId/seasons` catalog routes were removed because they represented an undocumented Nxsha catalog API. Clients should use `/catalog/movies/*`, `/catalog/tv/*`, `/catalog/genres/:mediaType`, or the TMDB-backed compatibility routes `/catalog/feed` and `/catalog/search`. Generic details and season routes now require an explicitly namespaced `tmdb:movie:<id>` or `tmdb:tv:<id>` identifier; the backend does not reinterpret provider IDs. User, watchlist, history, room, and WebSocket APIs are unchanged.
+Nxsha catalog discovery routes are not registered. Movie and TV discovery, search, details, genres, seasons, and episodes use TMDB endpoints. Nxsha remains a separate playback adapter only. Generic details and season routes require an explicitly namespaced `tmdb:movie:<id>` or `tmdb:tv:<id>` identifier; the backend does not reinterpret provider IDs. User, watchlist, history, room, and WebSocket APIs are unchanged.
 
 ### WebSocket protocol
 
@@ -148,7 +147,9 @@ The app displays the TMDB logo and required notice in its About and Credits foot
 
 ## Catalog and playback separation
 
-TMDB is the metadata provider for movie and TV discovery. The backend calls official TMDB v3 list, search, details, recommendations, genre, TV season, and episode endpoints. It sends the server-only bearer token, caches upstream JSON in `tmdb_catalog_cache`, and normalizes provider IDs as `tmdb:movie:<id>` / `tmdb:tv:<id>`. The legacy `nxsha_catalog_cache` table remains untouched and is not used by the TMDB integration.
+TMDB is the only metadata provider for movie and TV discovery. The backend calls official TMDB v3 list, search, details, recommendations, genre, TV season, and episode endpoints. It sends the server-only bearer token, caches upstream JSON in `tmdb_catalog_cache`, and normalizes provider IDs as `tmdb:movie:<id>` / `tmdb:tv:<id>`.
+
+Migration 0001 created a short-lived Nxsha cache in the unmerged backend branch, and migration 0002 created the TMDB cache. Migration 0003 removes only `nxsha_catalog_cache` using `DROP TABLE IF EXISTS`; it does not alter user, watchlist, history, room, playback, or chat tables. This integration task does not apply migrations to production.
 
 Metadata records contain no synthesized playback links. Nxsha playback stays a separate integration: an embed is used only when a playback integration explicitly supplies embed and watch URLs. Otherwise the result remains metadata-only. Configured MP4/HLS or external sources are separately validated by the existing allowlist and availability contract. A TMDB ID or availability in TMDB never proves playback.
 

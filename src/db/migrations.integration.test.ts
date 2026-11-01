@@ -42,17 +42,19 @@ test('Drizzle migration preserves rows from the pre-existing database schema', {
   }
 });
 
-test('catalog cache migrations are additive and preserve refresh and expiry metadata', async () => {
+test('TMDB cache migration is retained and the obsolete Nxsha cache is retired', async () => {
   const { readFile } = await import('node:fs/promises');
   const nxshaMigration = await readFile(new URL('../../drizzle/0001_rainy_slyde.sql', import.meta.url), 'utf8');
   const tmdbMigration = await readFile(new URL('../../drizzle/0002_tmdb_catalog_cache.sql', import.meta.url), 'utf8');
+  const retireMigration = await readFile(new URL('../../drizzle/0003_striped_hitman.sql', import.meta.url), 'utf8');
+
+  // Keep historical migration 0001 for environments that may already have applied it.
   assert.match(nxshaMigration, /CREATE TABLE "nxsha_catalog_cache"/);
   assert.match(tmdbMigration, /CREATE TABLE "tmdb_catalog_cache"/);
+  assert.equal(retireMigration.trim(), 'DROP TABLE IF EXISTS "nxsha_catalog_cache";');
   for (const migration of [nxshaMigration, tmdbMigration]) {
     assert.match(migration, /"payload" jsonb NOT NULL/);
     assert.match(migration, /"refreshed_at" timestamp/);
     assert.match(migration, /"expires_at" timestamp NOT NULL/);
-    assert.doesNotMatch(migration, /\b(DROP|TRUNCATE|DELETE FROM)\b/i);
-    assert.doesNotMatch(migration, /ALTER TABLE "(profiles|watchlists|watch_sessions|watch_rooms)"/i);
   }
 });

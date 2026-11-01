@@ -258,7 +258,7 @@ export const WatchPartyWorkspace: React.FC<WatchPartyWorkspaceProps> = ({
     }
     let active = true;
     const timer = setTimeout(() => {
-      fetch(`/api/nxsha/search?q=${encodeURIComponent(q)}`)
+      fetch(`/api/catalog/search?q=${encodeURIComponent(q)}&type=all`)
         .then((r) => r.json())
         .then((data) => {
           if (!active) return;

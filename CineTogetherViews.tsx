@@ -549,7 +549,7 @@ export const MediaDetailView: React.FC<MediaDetailViewProps> = ({
     setSelectedEpisodeNum(1);
 
     fetch(
-      `/api/nxsha/tv/${encodeURIComponent(String(item.tmdbId))}/seasons?title=${encodeURIComponent(item.title)}`
+      `/api/catalog/tv/${encodeURIComponent(String(item.tmdbId))}/seasons`
     )
       .then((r) => r.json())
       .then((data) => {
@@ -558,7 +558,7 @@ export const MediaDetailView: React.FC<MediaDetailViewProps> = ({
           setSeasons(data.seasons);
           setSelectedSeasonNum(data.seasons[0].seasonNumber || 1);
           setSelectedEpisodeNum(data.seasons[0].episodes?.[0]?.episodeNumber || 1);
-          setEpisodeSourceLabel(String(data.source || 'Nxsha Episodic Stream Resolver'));
+          setEpisodeSourceLabel(String(data.provider || 'TMDB season metadata'));
         }
       })
       .catch(() => {})
@@ -650,7 +650,7 @@ export const MediaDetailView: React.FC<MediaDetailViewProps> = ({
               <span className="text-slate-200 font-medium">{item.genres.join(' · ')}</span>
             </div>
             <div>
-              <span className="text-slate-500">Nxsha Route:</span>{' '}
+              <span className="text-slate-500">Nxsha playback route:</span>{' '}
               <span className="text-violet-300 font-mono">
                 {isEpisodic
                   ? `/embed/tv/${item.tmdbId}/${selectedSeasonNum}/${selectedEpisodeNum}`

@@ -77,7 +77,6 @@ type ActiveTab =
 const PLATFORMS = [
   'All Platforms',
   'CineTogether Originals',
-  'Nxsha Originals',
   'Netflix',
   'Prime Video',
   'Disney+',
@@ -117,9 +116,7 @@ export default function App() {
   const [activeTab, setActiveTab] = useState<ActiveTab>('home');
   const [catalog, setCatalog] = useState<MediaItem[]>(INITIAL_CATALOG);
   const [catalogLoading, setCatalogLoading] = useState<boolean>(false);
-  const [nxshaSourceLabel, setNxshaSourceLabel] = useState<string>(
-    'https://nxsha.space/api/home-feed (Full Multi-Section Index)'
-  );
+  const [catalogSourceLabel, setCatalogSourceLabel] = useState<string>('TMDB');
   const [isDemoData, setIsDemoData] = useState<boolean>(false);
 
   // Active Watch Room Code & Mode
@@ -273,17 +270,17 @@ export default function App() {
     return () => window.removeEventListener('popstate', syncFromUrl);
   }, []);
 
-  // Fetch full multi-section live catalog from /api/nxsha/feed & user watchlist from /api/watchlist on mount
+  // Fetch TMDB metadata and the user watchlist on mount.
   useEffect(() => {
     let active = true;
     setCatalogLoading(true);
-    fetch('/api/nxsha/feed?tabKey=all&pageSize=600')
+    fetch('/api/catalog/feed?section=all&page=1')
       .then((r) => r.json())
       .then((data) => {
         if (!active) return;
         if (Array.isArray(data.items) && data.items.length > 0) {
           setCatalog((prev) => deduplicateAndMergeCatalog(data.items, prev));
-          setNxshaSourceLabel(data.source || 'https://nxsha.space/api/home-feed');
+          setCatalogSourceLabel(data.provider || 'TMDB');
           setIsDemoData(Boolean(data.isDemoFallback));
         }
       })
@@ -308,7 +305,7 @@ export default function App() {
     };
   }, [userProfile.uid]);
 
-  // Debounced live search against /api/nxsha/search?q=...
+  // Debounced live search against the TMDB-backed catalog API.
   useEffect(() => {
     const trimmed = searchQuery.trim();
     setCatalogPage(1);
@@ -320,7 +317,7 @@ export default function App() {
     let active = true;
     setLiveSearchLoading(true);
     const timer = setTimeout(() => {
-      fetch(`/api/nxsha/search?q=${encodeURIComponent(trimmed)}`)
+      fetch(`/api/catalog/search?q=${encodeURIComponent(trimmed)}&type=all`)
         .then((r) => r.json())
         .then((data) => {
           if (!active) return;
@@ -712,7 +709,7 @@ export default function App() {
                   isDemoData ? 'bg-amber-400' : 'bg-emerald-400'
                 }`}
               />
-              <span>{isDemoData ? 'Demo Catalog + Cloud SQL Active' : nxshaSourceLabel}</span>
+              <span>{isDemoData ? 'Demo Catalog + Cloud SQL Active' : catalogSourceLabel}</span>
             </span>
 
             {/* Dark Mode / Ambient Contrast Toggle */}
@@ -1058,16 +1055,16 @@ export default function App() {
                       ? 'All TV Series Catalog'
                       : categoryFilter === 'anime'
                       ? 'All Anime Series & Films'
-                      : 'Complete Nxsha Media Catalog'}
+                      : 'TMDB Movie and TV Catalog'}
                   </h2>
                   <p className="text-xs text-slate-400">
                     Showing {paginatedCatalog.visibleItems.length} of {filteredCatalog.length}{' '}
                     matching titles (Total Indexed: {catalog.length}) ·{' '}
                     {liveSearchLoading
-                      ? 'Searching live Nxsha index...'
+                      ? 'Searching TMDB metadata...'
                       : catalogLoading
                       ? 'Refreshing catalog...'
-                      : nxshaSourceLabel}
+                      : catalogSourceLabel}
                   </p>
                 </div>
                 <div className="flex items-center gap-2">

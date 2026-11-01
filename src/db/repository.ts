@@ -3,7 +3,6 @@ import { and, desc, eq, gt, isNull, lte, ne, sql } from 'drizzle-orm';
 import { db } from './index.ts';
 import {
   chatMessages,
-  nxshaCatalogCache,
   tmdbCatalogCache,
   playbackStates,
   profiles,
@@ -44,33 +43,6 @@ export function verifyRoomPassword(plain: string, storedHash: string | null | un
   const expected = Buffer.from(storedHash, 'hex');
   const actual = Buffer.from(legacy, 'hex');
   return expected.length === actual.length && crypto.timingSafeEqual(expected, actual);
-}
-
-export async function getNxshaCatalogCache<T = unknown>(cacheKey: string, now = new Date()): Promise<T | null> {
-  const [cached] = await db
-    .select({ payload: nxshaCatalogCache.payload })
-    .from(nxshaCatalogCache)
-    .where(and(eq(nxshaCatalogCache.cacheKey, cacheKey), sql`${nxshaCatalogCache.expiresAt} > ${now}`))
-    .limit(1);
-  return (cached?.payload as T | undefined) ?? null;
-}
-
-export async function putNxshaCatalogCache(cacheKey: string, payload: unknown, ttlMs: number, now = new Date()): Promise<void> {
-  if (!Number.isSafeInteger(ttlMs) || ttlMs <= 0) throw new Error('Catalog cache TTL must be a positive integer.');
-  await db
-    .insert(nxshaCatalogCache)
-    .values({ cacheKey, payload, refreshedAt: now, expiresAt: new Date(now.getTime() + ttlMs) })
-    .onConflictDoUpdate({
-      target: nxshaCatalogCache.cacheKey,
-      set: { payload, refreshedAt: now, expiresAt: new Date(now.getTime() + ttlMs) },
-    });
-}
-
-export async function deleteExpiredNxshaCatalogCache(now = new Date()): Promise<number> {
-  const deleted = await db.delete(nxshaCatalogCache)
-    .where(sql`${nxshaCatalogCache.expiresAt} <= ${now}`)
-    .returning({ cacheKey: nxshaCatalogCache.cacheKey });
-  return deleted.length;
 }
 
 export async function getTmdbCatalogCache<T = unknown>(cacheKey: string, now = new Date()): Promise<T | null> {
