@@ -1318,12 +1318,22 @@ export default function App() {
                   <div className="flex flex-wrap items-center gap-3 pt-2">
                     <button
                       type="button"
-                      disabled={selectedMedia.playbackStatus !== 'synced-ready' && selectedMedia.playbackStatus !== 'external-watch'}
+                      disabled={
+                        !(nxshaEmbedTestEnabled && (selectedMedia.mediaType === 'movie' || selectedMedia.mediaType === 'tv')) &&
+                        selectedMedia.playbackStatus !== 'synced-ready' &&
+                        selectedMedia.playbackStatus !== 'external-watch'
+                      }
                       onClick={() => handleStartWatching(selectedMedia)}
                       className="inline-flex items-center gap-2 px-5 py-3 text-xs sm:text-sm font-semibold bg-white disabled:bg-slate-800 disabled:text-slate-500 hover:bg-slate-200 text-slate-950 rounded-xl transition-all whitespace-nowrap shrink-0 shadow-lg hover:scale-105 active:scale-95"
                     >
                       <Play className="w-4 h-4 fill-current" />
-                      <span>{selectedMedia.playbackStatus === 'synced-ready' || selectedMedia.playbackStatus === 'external-watch' ? 'Watch Solo' : 'Playback Unavailable'}</span>
+                      <span>{
+                        nxshaEmbedTestEnabled && (selectedMedia.mediaType === 'movie' || selectedMedia.mediaType === 'tv')
+                          ? 'Try Nxsha Player'
+                          : selectedMedia.playbackStatus === 'synced-ready' || selectedMedia.playbackStatus === 'external-watch'
+                            ? 'Watch Solo'
+                            : 'Playback Unavailable'
+                      }</span>
                     </button>
 
                     <button
