@@ -902,6 +902,12 @@ export default function App() {
   };
 
   const handleOpenMediaDetail = (item: MediaItem) => {
+    if (nxshaEmbedTestEnabled && (item.mediaType === 'movie' || item.mediaType === 'tv')) {
+      setSelectedMedia(item);
+      setIsTheaterOpen(false);
+      setNxshaPlaybackRequest({ item });
+      return;
+    }
     setSelectedMedia(item);
     navigateToTab('media-detail', `/media/${item.mediaType}/${item.id}`);
   };
