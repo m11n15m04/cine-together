@@ -31,13 +31,7 @@ import {
   Users,
   X,
 } from 'lucide-react';
-import {
-  INITIAL_CATALOG,
-  INITIAL_NOTIFICATIONS,
-  INITIAL_SOCIAL_POSTS,
-  INITIAL_WATCH_HISTORY,
-} from './data/catalog';
-import { TEST_MEDIA_FIXTURES } from './data/testMediaFixtures';
+import { INITIAL_NOTIFICATIONS } from './data/catalog';
 import {
   BRAND_CONFIG,
   MediaItem,
@@ -87,13 +81,7 @@ type ActiveTab =
 
 const PLATFORMS = [
   'All Platforms',
-  'CineTogether Originals',
-  'Nxsha Originals',
-  'Netflix',
-  'Prime Video',
-  'Disney+',
-  'Crunchyroll',
-  'Max',
+  'Unverified',
 ];
 
 const LANGUAGES = [
@@ -106,23 +94,10 @@ const LANGUAGES = [
   'Hindi',
 ];
 
-const GENRE_FILTERS = [
-  'All Genres',
-  'Action',
-  'Adventure',
-  'Animation',
-  'Comedy',
-  'Crime',
-  'Drama',
-  'Fantasy',
-  'Horror',
-  'Mystery',
-  'Romance',
-  'Sci-Fi',
-  'Thriller',
+const YEAR_FILTERS = [
+  'All Years',
+  ...Array.from({ length: 150 }, (_value, index) => String(new Date().getFullYear() - index)),
 ];
-
-const YEAR_FILTERS = ['All Years', '2026', '2025', '2024', '2023', '2022', '2021', '2020'];
 
 export default function App() {
   const [activeTab, setActiveTab] = useState<ActiveTab>('home');
@@ -137,13 +112,17 @@ export default function App() {
   const [trendingFeed, setTrendingFeed] = useState<MediaItem[]>([]);
   const [popularMoviesFeed, setPopularMoviesFeed] = useState<MediaItem[]>([]);
   const [popularTvFeed, setPopularTvFeed] = useState<MediaItem[]>([]);
+  const [topRatedMoviesFeed, setTopRatedMoviesFeed] = useState<MediaItem[]>([]);
+  const [nowPlayingMoviesFeed, setNowPlayingMoviesFeed] = useState<MediaItem[]>([]);
+  const [upcomingMoviesFeed, setUpcomingMoviesFeed] = useState<MediaItem[]>([]);
   const [trendingLoading, setTrendingLoading] = useState<boolean>(false);
   const [popularMoviesLoading, setPopularMoviesLoading] = useState<boolean>(false);
   const [popularTvLoading, setPopularTvLoading] = useState<boolean>(false);
+  const [genreOptions, setGenreOptions] = useState<Array<{ id: number; name: string }>>([]);
 
   // Server health state
   const [providerHealth, setProviderHealth] = useState<{
-    nxshaReachable: boolean;
+    tmdbConfigured: boolean;
     catalogSource?: string;
   } | null>(null);
 
@@ -154,38 +133,9 @@ export default function App() {
     query: string;
   } | null>(null);
 
-  const [nxshaSourceLabel, setNxshaSourceLabel] = useState<string>('Nxsha Catalog');
-  const [isDemoData, setIsDemoData] = useState<boolean>(false);
+  const [catalogSourceLabel, setCatalogSourceLabel] = useState<string>('TMDB Catalog');
   const [isProviderUnavailable, setIsProviderUnavailable] = useState<boolean>(false);
   const [providerErrorCode, setProviderErrorCode] = useState<number | null>(null);
-
-  const handleLoadTestFixtures = () => {
-    setCatalog(TEST_MEDIA_FIXTURES);
-    setSelectedMedia(TEST_MEDIA_FIXTURES[0]);
-    setIsProviderUnavailable(false);
-    setIsDemoData(true);
-    setCatalogError(null);
-    setNxshaSourceLabel('Offline Sample Content (Test Media Fixtures)');
-    setProviderHealth({
-      nxshaReachable: false,
-      catalogSource: 'Offline Sample Content (Isolated Test Fixtures)',
-    });
-    triggerBanner('Loaded verified offline test media fixtures for playback testing.');
-  };
-
-  const handleLoadOfflineCuratedSample = () => {
-    setCatalog(INITIAL_CATALOG);
-    setSelectedMedia(INITIAL_CATALOG[0]);
-    setIsProviderUnavailable(false);
-    setIsDemoData(true);
-    setCatalogError(null);
-    setNxshaSourceLabel('Offline Sample Content (Curated Demo)');
-    setProviderHealth({
-      nxshaReachable: false,
-      catalogSource: 'Offline Sample Content (Curated Preview)',
-    });
-    triggerBanner('Loaded curated offline sample catalog.');
-  };
 
   // Active Watch Room Code & Mode
   const [activeRoomCode, setActiveRoomCode] = useState<string>('LOVE-2026');
@@ -217,14 +167,14 @@ export default function App() {
   const [categoryFilter, setCategoryFilter] = useState<'all' | 'movie' | 'tv' | 'anime'>('all');
   const [platformFilter, setPlatformFilter] = useState<string>('All Platforms');
   const [languageFilter, setLanguageFilter] = useState<string>('All Languages');
-  const [genreFilter, setGenreFilter] = useState<string>('All Genres');
+  const [genreFilter, setGenreFilter] = useState<string>('');
   const [yearFilter, setYearFilter] = useState<string>('All Years');
   const [sortBy, setSortBy] = useState<'popularity' | 'rating' | 'release' | 'title'>('popularity');
   const [catalogPage, setCatalogPage] = useState<number>(1);
   const PAGE_SIZE = 24;
 
   // Active Media & Inline Theater Modal State
-  const [selectedMedia, setSelectedMedia] = useState<MediaItem>(TEST_MEDIA_FIXTURES[0]);
+  const [selectedMedia, setSelectedMedia] = useState<MediaItem | null>(null);
   const [isTheaterOpen, setIsTheaterOpen] = useState<boolean>(false);
 
   // User Watch History & My List (Watchlist)
@@ -232,44 +182,11 @@ export default function App() {
   const [likedIds, setLikedIds] = useState<string[]>([]);
 
   // Offline Vault Downloads
-  const [downloads, setDownloads] = useState<OfflineDownloadItem[]>([
-    {
-      mediaId: 'nx-204988',
-      title: 'Velvet Echoes in Kyoto',
-      mediaType: 'tv',
-      quality: '4K UHD',
-      sizeMB: 1456,
-      downloadedAt: 'Today, 21:05',
-      streamUrl: '/api/media/stream/nx-204988',
-      blobAvailable: true,
-      progress: 100,
-      status: 'completed',
-      accentColor: '#ec4899',
-      secondaryColor: '#3b0764',
-      year: '2026',
-      durationMinutes: 52,
-    },
-    {
-      mediaId: 'nx-969681',
-      title: 'Spider-Man: Brand New Day',
-      mediaType: 'movie',
-      quality: '1080p FHD',
-      sizeMB: 1562,
-      downloadedAt: 'Today, 20:15',
-      streamUrl: '/api/media/stream/nx-969681',
-      blobAvailable: true,
-      progress: 100,
-      status: 'completed',
-      accentColor: '#8b5cf6',
-      secondaryColor: '#1e1b4b',
-      year: '2026',
-      durationMinutes: 142,
-    },
-  ]);
+  const [downloads, setDownloads] = useState<OfflineDownloadItem[]>([]);
   const [isOfflineSimulated, setIsOfflineSimulated] = useState<boolean>(false);
 
   // Social Broadcast Posts & Toast Feedback
-  const [socialPosts, setSocialPosts] = useState<SocialBroadcastPost[]>(INITIAL_SOCIAL_POSTS);
+  const [socialPosts, setSocialPosts] = useState<SocialBroadcastPost[]>([]);
   const [statusBanner, setStatusBanner] = useState<string | null>(null);
 
   // Security & Privacy Settings
@@ -342,8 +259,40 @@ export default function App() {
     return () => window.removeEventListener('popstate', syncFromUrl);
   }, []);
 
-  // Load Codex authoritative catalog feed & independent category feeds + health
-  const loadInitialFeeds = () => {
+  const readCatalogResponse = async (path: string) => {
+    const response = await fetch(path);
+    const data = await response.json().catch(() => null) as {
+      items?: MediaItem[];
+      error?: string;
+      message?: string;
+      page?: number;
+      totalPages?: number;
+      totalResults?: number;
+      hasMore?: boolean;
+      provider?: string;
+    } | null;
+    if (!response.ok) {
+      const error = new Error(data?.error || data?.message || 'TMDB catalog request failed with HTTP ' + response.status);
+      (error as Error & { status?: number }).status = response.status;
+      throw error;
+    }
+    return data || {};
+  };
+
+  const catalogFeedPath = (page = 1) => {
+    const params = new URLSearchParams({ page: String(page) });
+    if (genreFilter) params.set('genre', genreFilter);
+    if (yearFilter && yearFilter !== 'All Years') params.set('year', yearFilter);
+    if (categoryFilter === 'movie') {
+      return '/api/catalog/movies/' + (genreFilter || yearFilter !== 'All Years' ? 'discover' : 'popular') + '?' + params;
+    }
+    if (categoryFilter === 'tv') {
+      return '/api/catalog/tv/' + (genreFilter || yearFilter !== 'All Years' ? 'discover' : 'popular') + '?' + params;
+    }
+    return '/api/catalog/feed?section=' + categoryFilter + '&' + params;
+  };
+
+  const loadInitialFeeds = async () => {
     setCatalogLoading(true);
     setTrendingLoading(true);
     setPopularMoviesLoading(true);
@@ -351,101 +300,84 @@ export default function App() {
     setCatalogError(null);
     setIsProviderUnavailable(false);
     setProviderErrorCode(null);
+    setCatalog([]);
+    setTrendingFeed([]);
+    setPopularMoviesFeed([]);
+    setPopularTvFeed([]);
+    setTopRatedMoviesFeed([]);
+    setNowPlayingMoviesFeed([]);
+    setUpcomingMoviesFeed([]);
+    setCatalogSourceLabel('TMDB Catalog');
 
-    // 0. Check Catalog Health
-    fetch('/api/health/catalog')
-      .then((r) => {
-        if (r.status === 503) {
-          setIsProviderUnavailable(true);
-          setProviderErrorCode(503);
-        }
-        return r.json().catch(() => null);
-      })
-      .then((data) => {
-        if (!data) return;
-        const reachable = Boolean(data.provider?.catalogApi?.status === 'available' || data.status === 'healthy');
-        setProviderHealth({
-          nxshaReachable: reachable,
-          catalogSource: reachable ? 'Nxsha.space Live Catalog' : 'Nxsha Catalog Unavailable (503)',
-        });
-        if (!reachable) {
-          setIsProviderUnavailable(true);
-          setProviderErrorCode(503);
-        }
-      })
-      .catch(() => {});
-
-    // 1. Authoritative Codex Catalog Feed (/api/catalog/feed)
-    fetch('/api/catalog/feed?section=all&page=1&pageSize=36')
-      .then(async (resp) => {
-        if (resp.status === 503) {
-          setIsProviderUnavailable(true);
-          setProviderErrorCode(503);
-          setCatalog([]);
-          setNxshaSourceLabel('Nxsha catalog unavailable (HTTP 503)');
-          setCatalogError('Nxsha catalog provider is currently unavailable (HTTP 503 Service Unavailable).');
-          return null;
-        }
-        if (!resp.ok) {
-          setCatalog([]);
-          setCatalogError(`Catalog service responded with HTTP ${resp.status}`);
-          return null;
-        }
-        return resp.json().catch(() => null);
-      })
-      .then((data) => {
-        if (!data) return;
-        if (data.state === 'unavailable' || data.code === 'NXSHA_CATALOG_API_ACCESS_REQUIRED') {
-          setIsProviderUnavailable(true);
-          setProviderErrorCode(503);
-          setCatalog([]);
-          setNxshaSourceLabel('Nxsha catalog unavailable (HTTP 503)');
-          setCatalogError(data.message || 'Nxsha catalog provider is currently unavailable.');
-          return;
-        }
-        if (Array.isArray(data.items) && data.items.length > 0) {
-          setIsProviderUnavailable(false);
-          setCatalog((prev) => deduplicateAndMergeCatalog(data.items, prev));
-          setNxshaSourceLabel(`Nxsha Catalog (${data.totalCatalogSize || data.items.length} Verified Titles)`);
-          setIsDemoData(Boolean(data.isDemoFallback));
-          setCatalogBackendPage(1);
-          setCatalogBackendHasMore(Boolean(data.hasMore));
-          setProviderHealth({
-            nxshaReachable: Boolean(data.liveConnected),
-            catalogSource: data.liveConnected ? 'Nxsha.space Live Catalog' : 'Nxsha Catalog (Cached)',
-          });
-          setSelectedMedia((curr) => curr || data.items[0]);
-
-          const allItems: MediaItem[] = data.items;
-          const movies = allItems.filter((i) => i.mediaType === 'movie');
-          const tvs = allItems.filter((i) => i.mediaType === 'tv');
-          const trending = allItems.filter((i) => i.isPopularThisWeek || i.rating >= 8.0).slice(0, 14);
-          if (trending.length > 0) setTrendingFeed(trending);
-          if (movies.length > 0) setPopularMoviesFeed(movies.slice(0, 14));
-          if (tvs.length > 0) setPopularTvFeed(tvs.slice(0, 14));
-        } else {
-          setIsProviderUnavailable(true);
-          setCatalog([]);
-          setCatalogError('Catalog provider returned 0 records.');
-        }
-      })
-      .catch(() => {
-        setIsProviderUnavailable(true);
-        setProviderErrorCode(503);
-        setCatalog([]);
-        setCatalogError('Could not load catalog feed. Check network or retry.');
-      })
-      .finally(() => {
-        setCatalogLoading(false);
-        setTrendingLoading(false);
-        setPopularMoviesLoading(false);
-        setPopularTvLoading(false);
+    const paths = [
+      catalogFeedPath(1),
+      '/api/catalog/movies/trending?page=1&window=week',
+      '/api/catalog/movies/popular?page=1',
+      '/api/catalog/tv/popular?page=1',
+      '/api/catalog/movies/top-rated?page=1',
+      '/api/catalog/movies/now-playing?page=1',
+      '/api/catalog/movies/upcoming?page=1',
+      '/api/catalog/status',
+    ];
+    const results = await Promise.allSettled(paths.map((path) => fetch(path).then(async (response) => ({
+      response,
+      data: await response.json().catch(() => null) as any,
+    }))));
+    const sectionSetters = [
+      null,
+      setTrendingFeed,
+      setPopularMoviesFeed,
+      setPopularTvFeed,
+      setTopRatedMoviesFeed,
+      setNowPlayingMoviesFeed,
+      setUpcomingMoviesFeed,
+    ] as const;
+    results.slice(1, 7).forEach((result, index) => {
+      if (result.status === 'fulfilled' && result.value.response.ok) {
+        const items = result.value.data?.items;
+        sectionSetters[index + 1]?.(Array.isArray(items) ? items as MediaItem[] : []);
+      } else {
+        sectionSetters[index + 1]?.([]);
+      }
+    });
+    if (results[0].status === 'fulfilled' && results[0].value.response.ok) {
+      const data = results[0].value.data;
+      const items = Array.isArray(data?.items) ? data.items as MediaItem[] : [];
+      setCatalog(items);
+      setSelectedMedia((current) => current && items.some((item) => item.id === current.id) ? current : items[0] || null);
+      setCatalogBackendPage(data?.page || 1);
+      setCatalogBackendHasMore(Boolean(data?.hasMore));
+      setCatalogSourceLabel('TMDB v3');
+    } else {
+      const failure = results[0].status === 'rejected'
+        ? results[0].reason as Error & { status?: number }
+        : new Error((results[0].value.data as { error?: string } | null)?.error || 'TMDB catalog request failed.');
+      const failureStatus = results[0].status === 'rejected'
+        ? (results[0].reason as Error & { status?: number }).status
+        : results[0].value.response.status;
+      setCatalog([]);
+      setSelectedMedia(null);
+      setCatalogError(failure.message || 'TMDB could not load catalog metadata. Retry the request.');
+      setProviderErrorCode(failureStatus || null);
+      setIsProviderUnavailable(true);
+      setCatalogBackendHasMore(false);
+    }
+    const status = results[7];
+    if (status.status === 'fulfilled') {
+      setProviderHealth({
+        tmdbConfigured: Boolean(status.value.data?.configured && status.value.response.ok),
+        catalogSource: status.value.data?.configured ? 'TMDB v3 metadata' : 'TMDB API token unavailable',
       });
+    } else {
+      setProviderHealth({ tmdbConfigured: false, catalogSource: 'TMDB status unavailable' });
+    }
+    setCatalogLoading(false);
+    setTrendingLoading(false);
+    setPopularMoviesLoading(false);
+    setPopularTvLoading(false);
   };
 
   useEffect(() => {
-    loadInitialFeeds();
-
     if (userProfile.isGuest) return;
 
     apiFetch('/api/watchlist')
@@ -479,48 +411,65 @@ export default function App() {
       .catch(() => {});
   }, [userProfile.isGuest, userProfile.uid]);
 
-  // Handle Dynamic "Load More" from Codex backend provider
+  useEffect(() => {
+    if (!['home', 'movies', 'tv', 'anime'].includes(activeTab) || searchQuery.trim()) return;
+    void loadInitialFeeds();
+  }, [activeTab, categoryFilter, genreFilter, yearFilter, searchQuery]);
+
+  useEffect(() => {
+    if (categoryFilter !== 'movie' && categoryFilter !== 'tv') {
+      setGenreOptions([]);
+      return;
+    }
+    let active = true;
+    fetch('/api/catalog/genres/' + categoryFilter)
+      .then(async (response) => {
+        const payload = await response.json().catch(() => null) as { genres?: Array<{ id: number; name: string }> } | null;
+        if (!response.ok) throw new Error('TMDB genre list unavailable');
+        if (active) setGenreOptions(Array.isArray(payload?.genres) ? payload.genres : []);
+      })
+      .catch(() => {
+        if (active) setGenreOptions([]);
+      });
+    return () => { active = false; };
+  }, [categoryFilter]);
+
   const handleLoadMoreCatalog = async () => {
     if (catalogLoadingMore) return;
     setCatalogLoadingMore(true);
-
-    const section =
-      categoryFilter === 'movie'
-        ? 'movie'
-        : categoryFilter === 'tv'
-        ? 'tv'
-        : categoryFilter === 'anime'
-        ? 'anime'
-        : 'all';
     const nextPage = catalogBackendPage + 1;
-
     try {
-      const resp = await fetch(
-        `/api/catalog/feed?section=${section}&page=${nextPage}&pageSize=24`
-      );
-      if (resp.ok) {
-        const data = await resp.json();
-        if (Array.isArray(data.items) && data.items.length > 0) {
-          setCatalog((prev) => deduplicateAndMergeCatalog(prev, data.items));
-          setCatalogBackendPage(nextPage);
-          setCatalogBackendHasMore(Boolean(data.hasMore));
-          setCatalogPage((prev) => prev + 1);
-        } else {
-          setCatalogBackendHasMore(false);
-        }
+      let path = catalogFeedPath(nextPage);
+      if (searchQuery.trim()) {
+        const params = new URLSearchParams({
+          q: searchQuery.trim(),
+          type: categoryFilter === 'movie' || categoryFilter === 'tv' ? categoryFilter : 'all',
+          page: String(nextPage),
+        });
+        if (yearFilter !== 'All Years') params.set('year', yearFilter);
+        path = '/api/catalog/search?' + params.toString();
       }
-    } catch {
-      // Keep existing items, allow retry
+      const data = await readCatalogResponse(path);
+      const items = Array.isArray(data.items) ? data.items : [];
+      if (items.length) {
+        setCatalog((current) => deduplicateAndMergeCatalog(items, current));
+        setCatalogBackendPage(nextPage);
+        setCatalogBackendHasMore(Boolean(data.hasMore));
+        setCatalogPage((current) => current + 1);
+      } else {
+        setCatalogBackendHasMore(false);
+      }
+    } catch (error) {
+      setCatalogError(error instanceof Error ? error.message : 'TMDB could not load more titles. Retry the request.');
     } finally {
       setCatalogLoadingMore(false);
     }
   };
 
-  // Debounced server-backed search against Codex /api/catalog/search?q=...
   useEffect(() => {
-    const trimmed = searchQuery.trim();
+    const query = searchQuery.trim();
     setCatalogPage(1);
-    if (trimmed.length < 2) {
+    if (query.length < 2) {
       setLiveSearchLoading(false);
       setServerSearchMetadata(null);
       return;
@@ -528,25 +477,45 @@ export default function App() {
 
     let active = true;
     setLiveSearchLoading(true);
+    setCatalogLoading(true);
+    setCatalogError(null);
     const timer = setTimeout(() => {
-      fetch(
-        `/api/catalog/search?q=${encodeURIComponent(trimmed)}`
-      )
-        .then((r) => r.json())
+      const params = new URLSearchParams({
+        q: query,
+        type: categoryFilter === 'movie' || categoryFilter === 'tv' ? categoryFilter : 'all',
+        page: '1',
+      });
+      if (yearFilter !== 'All Years') params.set('year', yearFilter);
+      readCatalogResponse('/api/catalog/search?' + params.toString())
         .then((data) => {
           if (!active) return;
-          if (Array.isArray(data.items)) {
-            setCatalog((prev) => deduplicateAndMergeCatalog(data.items, prev));
-            setServerSearchMetadata({
-              totalResults: data.totalResults ?? data.items.length,
-              providers: data.providers || ['Nxsha Catalog'],
-              query: trimmed,
-            });
-          }
+          const items = Array.isArray(data.items) ? data.items : [];
+          setCatalog(items);
+          setSelectedMedia(items[0] || null);
+          setCatalogBackendPage(data.page || 1);
+          setCatalogBackendHasMore(Boolean(data.hasMore));
+          setCatalogSourceLabel('TMDB Search');
+          setIsProviderUnavailable(false);
+          setServerSearchMetadata({
+            totalResults: data.totalResults ?? items.length,
+            providers: ['TMDB'],
+            query,
+          });
         })
-        .catch(() => {})
+        .catch((error: Error & { status?: number }) => {
+          if (!active) return;
+          setCatalog([]);
+          setSelectedMedia(null);
+          setIsProviderUnavailable(true);
+          setProviderErrorCode(error.status || null);
+          setCatalogError(error.message || 'TMDB search failed. Retry the request.');
+          setServerSearchMetadata(null);
+        })
         .finally(() => {
-          if (active) setLiveSearchLoading(false);
+          if (active) {
+            setLiveSearchLoading(false);
+            setCatalogLoading(false);
+          }
         });
     }, 280);
 
@@ -554,7 +523,7 @@ export default function App() {
       active = false;
       clearTimeout(timer);
     };
-  }, [searchQuery, categoryFilter]);
+  }, [searchQuery, categoryFilter, yearFilter]);
 
   const navigateToTab = (tab: ActiveTab, customPath?: string) => {
     setActiveTab(tab);
@@ -675,50 +644,36 @@ export default function App() {
 
   // 16 Thematic Homepage Collections for Carousel Rows
   const trendingMovies = useMemo(
-    () =>
-      trendingFeed.length > 0
-        ? trendingFeed.filter((i) => i.mediaType === 'movie')
-        : catalog.filter((i) => i.isTrending && i.mediaType === 'movie'),
-    [trendingFeed, catalog]
+    () => trendingFeed.filter((i) => i.mediaType === 'movie'),
+    [trendingFeed]
   );
 
   const popularMovies = useMemo(
-    () =>
-      popularMoviesFeed.length > 0
-        ? popularMoviesFeed
-        : catalog.filter((i) => i.mediaType === 'movie').sort((a, b) => b.rating - a.rating),
-    [popularMoviesFeed, catalog]
+    () => popularMoviesFeed,
+    [popularMoviesFeed]
   );
 
   const topRatedMovies = useMemo(
-    () => [...catalog].sort((a, b) => b.rating - a.rating).filter((i) => i.rating >= 8.0).slice(0, 24),
-    [catalog]
+    () => topRatedMoviesFeed,
+    [topRatedMoviesFeed]
   );
 
   const recentlyReleased = useMemo(
-    () => catalog.filter((i) => i.year === '2026' || i.year === '2025' || i.isRecentlyAdded).slice(0, 24),
-    [catalog]
+    () => nowPlayingMoviesFeed,
+    [nowPlayingMoviesFeed]
   );
 
   const upcomingMovies = useMemo(
-    () =>
-      catalog
-        .filter(
-          (i) =>
-            i.year === '2026' ||
-            i.sourceAvailability === 'unavailable' ||
-            i.playbackStatus === 'metadata-only'
-        )
-        .slice(0, 24),
-    [catalog]
+    () => upcomingMoviesFeed,
+    [upcomingMoviesFeed]
   );
 
   const popularTvShows = useMemo(
     () =>
       popularTvFeed.length > 0
         ? popularTvFeed
-        : catalog.filter((i) => i.mediaType === 'tv'),
-    [popularTvFeed, catalog]
+        : [],
+    [popularTvFeed]
   );
 
   const animeCollection = useMemo(
@@ -818,20 +773,20 @@ export default function App() {
   );
 
   const spotlightItems = useMemo(() => {
-    const featured = catalog.filter((c) => c.backdropUrl && c.rating >= 7.5);
+    const featured = catalog.filter((c) => c.backdropUrl && (c.rating ?? 0) >= 7.5);
     return featured.length > 0 ? featured.slice(0, 5) : catalog.slice(0, 5);
   }, [catalog]);
 
   const handleNextSpotlight = () => {
     if (spotlightItems.length === 0) return;
-    const currentIndex = spotlightItems.findIndex((s) => s.id === selectedMedia.id);
+    const currentIndex = spotlightItems.findIndex((s) => s.id === selectedMedia?.id);
     const nextIndex = (currentIndex + 1) % spotlightItems.length;
     setSelectedMedia(spotlightItems[nextIndex]);
   };
 
   const handlePrevSpotlight = () => {
     if (spotlightItems.length === 0) return;
-    const currentIndex = spotlightItems.findIndex((s) => s.id === selectedMedia.id);
+    const currentIndex = spotlightItems.findIndex((s) => s.id === selectedMedia?.id);
     const prevIndex = (currentIndex - 1 + spotlightItems.length) % spotlightItems.length;
     setSelectedMedia(spotlightItems[prevIndex]);
   };
@@ -848,7 +803,7 @@ export default function App() {
       setCategoryFilter('all');
     }
     setPlatformFilter('All Platforms');
-    setGenreFilter('All Genres');
+    setGenreFilter('');
     setYearFilter('All Years');
     setLanguageFilter('All Languages');
     setSortBy('popularity');
@@ -856,6 +811,12 @@ export default function App() {
   };
 
   const handleStartWatching = (item: MediaItem) => {
+    if (item.playbackStatus !== 'synced-ready' && item.playbackStatus !== 'external-watch') {
+      setSelectedMedia(item);
+      setCatalogError('TMDB metadata does not confirm playback. No authorized playback source is configured for this title.');
+      setIsTheaterOpen(false);
+      return;
+    }
     setSelectedMedia(item);
     setIsTheaterOpen(true);
     setActiveTab('home');
@@ -900,7 +861,12 @@ export default function App() {
   };
 
   const handleDownloadMedia = (item: MediaItem, quality: QualityTier = '1080p FHD') => {
-    const sizeMB = estimateOfflineSizeMB(item.durationMinutes, quality);
+    const hasAuthorizedSource = Boolean(item.authorizedPlaybackSource || item.hlsUrl || item.streamUrl);
+    if (!hasAuthorizedSource) {
+      triggerBanner('No authorized media source is available for this title.');
+      return;
+    }
+    const sizeMB = estimateOfflineSizeMB(item.durationMinutes ?? 95, quality);
     setDownloads((prev) => {
       const exists = prev.some((d) => d.mediaId === item.id);
       if (exists) {
@@ -916,14 +882,14 @@ export default function App() {
           quality,
           sizeMB,
           downloadedAt: 'Just now',
-          streamUrl: item.streamUrl,
+          streamUrl: item.streamUrl || item.authorizedPlaybackSource || '',
           blobAvailable: true,
           progress: 100,
           status: 'completed',
           accentColor: item.accentColor,
           secondaryColor: item.secondaryColor,
           year: item.year,
-          durationMinutes: item.durationMinutes,
+          durationMinutes: item.durationMinutes ?? 0,
         },
         ...prev,
       ];
@@ -1000,6 +966,7 @@ export default function App() {
 
   const unreadNotifCount = notifications.filter((n) => !n.read).length;
   const isDark = themeMode === 'oled-dark';
+  const activeMedia = selectedMedia || catalog[0] || null;
 
   return (
     <div
@@ -1137,7 +1104,7 @@ export default function App() {
           </div>
 
           <div className="flex items-center gap-2 flex-wrap">
-            {/* Clear Demo / Live Data Indicator */}
+            {/* TMDB catalog source indicator */}
             <span
               data-testid="catalog-source-indicator"
               className="inline-flex items-center gap-1.5 px-2.5 py-1 rounded-lg bg-slate-900 border border-slate-800 text-[11px] font-mono text-slate-300"
@@ -1146,8 +1113,6 @@ export default function App() {
                 className={`w-2 h-2 rounded-full ${
                   isProviderUnavailable
                     ? 'bg-amber-400'
-                    : isDemoData
-                    ? 'bg-sky-400'
                     : catalogLoading
                     ? 'bg-slate-400 animate-pulse'
                     : 'bg-emerald-400'
@@ -1155,10 +1120,8 @@ export default function App() {
               />
               <span>
                 {isProviderUnavailable
-                  ? 'Nxsha catalog unavailable (503)'
-                  : isDemoData
-                  ? 'Offline Sample Content'
-                  : nxshaSourceLabel}
+                  ? 'TMDB catalog unavailable'
+                  : catalogSourceLabel}
               </span>
             </span>
 
@@ -1245,7 +1208,7 @@ export default function App() {
       {/* Main Content Container */}
       <main className="max-w-7xl mx-auto px-4 sm:px-6 py-8 space-y-10">
         {/* Inline Solo Adaptive Video Player Drawer */}
-        {isTheaterOpen && (
+        {isTheaterOpen && selectedMedia && (
           <section aria-label="Active Cinema Theater" className="space-y-4">
             <AdaptiveVideoPlayer
               item={selectedMedia}
@@ -1276,7 +1239,7 @@ export default function App() {
                         {selectedMedia.platform}
                       </span>
                       <span className="text-amber-400 font-semibold">
-                        ★ {selectedMedia.rating.toFixed(1)}
+                        {selectedMedia.rating === undefined ? 'Rating unavailable' : '★ ' + selectedMedia.rating.toFixed(1)}
                       </span>
                       <span className="text-slate-500">·</span>
                       <span className="text-slate-300">{selectedMedia.year}</span>
@@ -1284,7 +1247,7 @@ export default function App() {
                       <span className="text-slate-300">{selectedMedia.language}</span>
                       <span className="text-slate-500">·</span>
                       <span className="text-rose-300">
-                        ❤️ {selectedMedia.coupleScore || 95}% Couple Match
+                        {selectedMedia.coupleScore ? '❤️ ' + selectedMedia.coupleScore + '% Couple Match' : null}
                       </span>
                     </div>
 
@@ -1309,11 +1272,12 @@ export default function App() {
                   <div className="flex flex-wrap items-center gap-3 pt-2">
                     <button
                       type="button"
+                      disabled={selectedMedia.playbackStatus !== 'synced-ready' && selectedMedia.playbackStatus !== 'external-watch'}
                       onClick={() => handleStartWatching(selectedMedia)}
-                      className="inline-flex items-center gap-2 px-5 py-3 text-xs sm:text-sm font-semibold bg-white hover:bg-slate-200 text-slate-950 rounded-xl transition-all whitespace-nowrap shrink-0 shadow-lg hover:scale-105 active:scale-95"
+                      className="inline-flex items-center gap-2 px-5 py-3 text-xs sm:text-sm font-semibold bg-white disabled:bg-slate-800 disabled:text-slate-500 hover:bg-slate-200 text-slate-950 rounded-xl transition-all whitespace-nowrap shrink-0 shadow-lg hover:scale-105 active:scale-95"
                     >
                       <Play className="w-4 h-4 fill-current" />
-                      <span>Watch Solo</span>
+                      <span>{selectedMedia.playbackStatus === 'synced-ready' || selectedMedia.playbackStatus === 'external-watch' ? 'Watch Solo' : 'Playback Unavailable'}</span>
                     </button>
 
                     <button
@@ -1427,13 +1391,13 @@ export default function App() {
                   <div className="flex items-center gap-2">
                     <span
                       className={`inline-flex items-center gap-1.5 px-2.5 py-0.5 rounded-full font-mono text-[11px] ${
-                        providerHealth?.nxshaReachable
+                        providerHealth?.tmdbConfigured
                           ? 'bg-emerald-500/15 text-emerald-300 border border-emerald-500/30'
                           : 'bg-amber-500/15 text-amber-300 border border-amber-500/30'
                       }`}
                     >
                       <span className="w-1.5 h-1.5 rounded-full bg-current animate-pulse" />
-                      Nxsha Catalog: {providerHealth?.nxshaReachable ? 'Live Connected' : 'Official API Access Required (Unavailable)'}
+                      TMDB v3 token: {providerHealth?.tmdbConfigured ? 'Configured' : 'Not configured'}
                     </span>
                   </div>
                 </div>
@@ -1456,7 +1420,7 @@ export default function App() {
                         Catalog Provider Unavailable
                       </h2>
                       <p className="text-xs text-rose-300 font-mono">
-                        {providerErrorCode ? `HTTP ${providerErrorCode} Service Unavailable` : 'Upstream Catalog Unreachable'} · Nxsha Provider
+                        {providerErrorCode ? 'HTTP ' + providerErrorCode : 'Upstream catalog unavailable'} · TMDB v3
                       </p>
                     </div>
                   </div>
@@ -1468,14 +1432,14 @@ export default function App() {
                 </div>
 
                 <p className="text-sm text-slate-300 leading-relaxed max-w-3xl">
-                  The primary upstream media provider is currently unreachable or degraded. CineTogether only surfaces authentic catalog metadata and strictly avoids fabricating fake movie titles or mock streams.
+                  {catalogError || 'TMDB metadata is currently unavailable. Check the server-side TMDB API token or provider connection, then retry.'}
                 </p>
 
                 {/* Status Pillars */}
                 <div className="grid grid-cols-1 sm:grid-cols-3 gap-3 text-xs">
                   <div className="p-3.5 rounded-2xl bg-slate-950/60 border border-slate-800 space-y-1">
                     <span className="text-slate-400 font-mono text-[11px] block">Ingestion Status</span>
-                    <span className="text-rose-400 font-medium font-mono">503 Service Unavailable</span>
+                    <span className="text-rose-400 font-medium font-mono">Provider unavailable</span>
                   </div>
                   <div className="p-3.5 rounded-2xl bg-slate-950/60 border border-slate-800 space-y-1">
                     <span className="text-slate-400 font-mono text-[11px] block">Catalog Guard</span>
@@ -1483,34 +1447,18 @@ export default function App() {
                   </div>
                   <div className="p-3.5 rounded-2xl bg-slate-950/60 border border-slate-800 space-y-1">
                     <span className="text-slate-400 font-mono text-[11px] block">Playback Security</span>
-                    <span className="text-violet-400 font-medium font-mono">Drizzle/PostgreSQL DB</span>
+                    <span className="text-violet-400 font-medium font-mono">Playback checked separately</span>
                   </div>
                 </div>
 
                 <div className="flex flex-wrap items-center gap-3 pt-2">
                   <button
                     type="button"
-                    onClick={() => loadInitialFeeds()}
+                    onClick={() => void loadInitialFeeds()}
                     className="px-4 py-2.5 rounded-xl bg-rose-600 hover:bg-rose-500 text-white text-xs font-semibold inline-flex items-center gap-2 transition-colors shadow-lg"
                   >
                     <RefreshCw className="w-3.5 h-3.5" />
-                    <span>Retry Provider Connection</span>
-                  </button>
-                  <button
-                    type="button"
-                    onClick={handleLoadTestFixtures}
-                    className="px-4 py-2.5 rounded-xl bg-slate-800 hover:bg-slate-700 text-slate-200 text-xs font-semibold inline-flex items-center gap-2 transition-colors border border-slate-700"
-                  >
-                    <Play className="w-3.5 h-3.5 text-violet-400" />
-                    <span>Open Isolated Test Media Fixtures (Offline Verification Sample)</span>
-                  </button>
-                  <button
-                    type="button"
-                    onClick={handleLoadOfflineCuratedSample}
-                    className="px-4 py-2.5 rounded-xl bg-violet-950/40 hover:bg-violet-900/40 text-violet-300 text-xs font-semibold inline-flex items-center gap-2 transition-colors border border-violet-700/50"
-                  >
-                    <Film className="w-3.5 h-3.5 text-violet-400" />
-                    <span>Explore Curated Offline Sample Content</span>
+                    <span>Retry TMDB</span>
                   </button>
                 </div>
               </div>
@@ -1525,7 +1473,7 @@ export default function App() {
                 </div>
                 <button
                   type="button"
-                  onClick={() => loadInitialFeeds()}
+                  onClick={() => void loadInitialFeeds()}
                   className="px-3.5 py-1.5 rounded-xl bg-rose-600 hover:bg-rose-500 text-white text-xs font-semibold shrink-0"
                 >
                   Retry Loading
@@ -1536,7 +1484,7 @@ export default function App() {
             {/* Empty Catalog Notice */}
             {!catalogLoading && !isProviderUnavailable && !catalogError && filteredCatalog.length === 0 && (
               <div role="status" className="p-6 rounded-2xl bg-slate-900/60 border border-slate-800 text-sm text-slate-300">
-                {searchQuery ? `No Nxsha titles matched “${searchQuery}”.` : 'The Nxsha catalog is currently empty.'}
+                {searchQuery ? 'No TMDB titles matched your search.' : 'TMDB returned no titles for these filters.'}
               </div>
             )}
 
@@ -1548,7 +1496,7 @@ export default function App() {
                   title="Trending Movies"
                   subtitle="Top trending theatrical and streaming releases worldwide"
                   icon={<Flame className="w-5 h-5 text-amber-400" />}
-                  badge="🔥 Trending on Nxsha"
+                  badge="🔥 Trending on TMDB"
                   items={trendingMovies}
                   likedIds={likedIds}
                   isLoading={trendingLoading}
@@ -1602,7 +1550,7 @@ export default function App() {
                 {/* 5. Top Rated Movies */}
                 <HorizontalPosterCarousel
                   title="Top Rated Movies"
-                  subtitle="Highest critical acclaim and community ratings (8.0+)"
+                  subtitle="Top-rated titles according to TMDB"
                   icon={<Sparkles className="w-5 h-5 text-emerald-400" />}
                   badge="Masterpieces"
                   items={topRatedMovies}
@@ -1624,8 +1572,8 @@ export default function App() {
 
                 {/* 6. Recently Released Movies */}
                 <HorizontalPosterCarousel
-                  title="Recently Released Movies"
-                  subtitle="Newest releases from 2025 and 2026 cinema seasons"
+                  title="Now Playing in Theaters"
+                  subtitle="Movies TMDB lists as currently in theatrical release"
                   icon={<Layers className="w-5 h-5 text-sky-400" />}
                   badge="New Arrivals"
                   items={recentlyReleased}
@@ -1648,7 +1596,7 @@ export default function App() {
                 {/* 7. Upcoming Movies */}
                 <HorizontalPosterCarousel
                   title="Upcoming Movies"
-                  subtitle="Anticipated theatrical premieres and future streaming releases"
+                  subtitle="Upcoming movies listed by TMDB"
                   icon={<Compass className="w-5 h-5 text-fuchsia-400" />}
                   badge="Coming Soon"
                   items={upcomingMovies}
@@ -1996,9 +1944,10 @@ export default function App() {
                     }}
                     className="px-2.5 py-1.5 text-xs rounded-xl bg-slate-900 border border-slate-800 text-slate-200 focus:outline-none focus:border-violet-500"
                   >
-                    {GENRE_FILTERS.map((g) => (
-                      <option key={g} value={g}>
-                        {g}
+                    <option value="">All Genres</option>
+                    {genreOptions.map((genre) => (
+                      <option key={genre.id} value={String(genre.id)}>
+                        {genre.name}
                       </option>
                     ))}
                   </select>
@@ -2054,7 +2003,7 @@ export default function App() {
               </div>
 
               {/* Active Filter Chips */}
-              {(genreFilter !== 'All Genres' ||
+              {(Boolean(genreFilter) ||
                 yearFilter !== 'All Years' ||
                 languageFilter !== 'All Languages' ||
                 Boolean(searchQuery)) && (
@@ -2066,10 +2015,10 @@ export default function App() {
                       <button type="button" onClick={() => setSearchQuery('')} aria-label="Clear search query" className="hover:text-white font-bold ml-1">×</button>
                     </span>
                   )}
-                  {genreFilter !== 'All Genres' && (
+                  {Boolean(genreFilter) && (
                     <span className="inline-flex items-center gap-1 px-2.5 py-0.5 rounded-full bg-violet-500/20 text-violet-300 border border-violet-500/30 text-[11px]">
-                      Genre: {genreFilter}
-                      <button type="button" onClick={() => setGenreFilter('All Genres')} aria-label="Clear genre filter" className="hover:text-white font-bold ml-1">×</button>
+                      Genre: {genreOptions.find((genre) => String(genre.id) === genreFilter)?.name || genreFilter}
+                      <button type="button" onClick={() => setGenreFilter('')} aria-label="Clear genre filter" className="hover:text-white font-bold ml-1">×</button>
                     </span>
                   )}
                   {yearFilter !== 'All Years' && (
@@ -2100,22 +2049,22 @@ export default function App() {
                       : categoryFilter === 'tv'
                       ? 'All TV Series Catalog'
                       : categoryFilter === 'anime'
-                      ? 'All Anime Series & Films'
-                      : 'Complete Nxsha Media Catalog'}
+                      ? 'Anime metadata is not a separate TMDB category'
+                      : 'TMDB Movies & TV Catalog'}
                   </h2>
                   <p className="text-xs text-slate-400">
                     Showing {paginatedCatalog.visibleItems.length} of {filteredCatalog.length}{' '}
                     matching titles (Total Indexed: {catalog.length}) ·{' '}
                     {liveSearchLoading
-                      ? 'Searching live Nxsha index...'
+                      ? 'Searching TMDB...'
                       : catalogLoading
                       ? 'Refreshing catalog...'
-                      : nxshaSourceLabel}
+                      : catalogSourceLabel}
                   </p>
                 </div>
                 <div className="flex items-center gap-2">
                   {(searchQuery ||
-                    genreFilter !== 'All Genres' ||
+                    Boolean(genreFilter) ||
                     yearFilter !== 'All Years' ||
                     languageFilter !== 'All Languages') && (
                     <button
@@ -2129,7 +2078,11 @@ export default function App() {
                 </div>
               </div>
 
-              {filteredCatalog.length === 0 ? (
+              {catalogLoading ? (
+                <div role="status" aria-live="polite" className="p-12 text-center bg-slate-900/80 border border-slate-800 rounded-3xl text-sm text-slate-300">
+                  Loading movie and TV metadata from TMDB…
+                </div>
+              ) : catalogError || isProviderUnavailable ? null : filteredCatalog.length === 0 ? (
                 <div className="p-12 text-center bg-slate-900/80 border border-slate-800 rounded-3xl space-y-4">
                   <div className="w-12 h-12 mx-auto rounded-2xl bg-violet-500/10 border border-violet-500/20 flex items-center justify-center text-violet-400">
                     <Search className="w-6 h-6" />
@@ -2189,7 +2142,7 @@ export default function App() {
                                 {item.mediaType}
                               </div>
                               <div className="absolute top-2.5 right-2.5 px-2 py-0.5 rounded-md bg-slate-950/85 border border-white/10 text-[11px] font-mono text-amber-400">
-                                ★ {item.rating.toFixed(1)}
+                                {item.rating === undefined ? 'Rating unavailable' : '★ ' + item.rating.toFixed(1)}
                               </div>
                             </div>
 
@@ -2212,7 +2165,7 @@ export default function App() {
                               <div className="text-xs text-slate-400">
                                 {item.genres.join(' · ')} ·{' '}
                                 {item.mediaType === 'movie'
-                                  ? `${item.durationMinutes}m`
+                                  ? (item.durationMinutes ? item.durationMinutes + 'm' : 'Runtime unavailable')
                                   : `${item.seasons || 1}S`}
                               </div>
 
@@ -2226,11 +2179,13 @@ export default function App() {
                             <div className="flex items-center gap-2">
                               <button
                                 type="button"
-                                onClick={() => handleStartWatching(item)}
-                                className="flex-1 inline-flex items-center justify-center gap-1.5 px-3 py-2 text-xs font-semibold bg-gradient-to-r from-violet-600 to-fuchsia-600 hover:from-violet-500 hover:to-fuchsia-500 text-white rounded-xl transition-all whitespace-nowrap"
+                                onClick={() => item.playbackStatus === 'synced-ready' || item.playbackStatus === 'external-watch' ? handleStartWatching(item) : handleOpenMediaDetail(item)}
+                                className="flex-1 inline-flex items-center justify-center gap-1.5 px-3 py-2 text-xs font-semibold bg-gradient-to-r from-violet-600 to-fuchsia-600 hover:from-violet-500 hover:to-fuchsia-500 disabled:bg-slate-800 disabled:text-slate-400 text-white rounded-xl transition-all whitespace-nowrap"
                               >
-                                <Play className="w-3.5 h-3.5 fill-current" />
-                                <span>Watch</span>
+                                {item.playbackStatus === 'synced-ready' || item.playbackStatus === 'external-watch'
+                                  ? <Play className="w-3.5 h-3.5 fill-current" />
+                                  : <Film className="w-3.5 h-3.5" />}
+                                <span>{item.playbackStatus === 'synced-ready' || item.playbackStatus === 'external-watch' ? 'Watch' : 'Details'}</span>
                               </button>
 
                               <button
@@ -2294,7 +2249,7 @@ export default function App() {
                       {catalogLoadingMore ? (
                         <div className="inline-flex items-center gap-2 px-6 py-3 rounded-2xl bg-slate-900 border border-violet-500/40 text-xs sm:text-sm font-semibold text-violet-300">
                           <RefreshCw className="w-4 h-4 animate-spin text-violet-400" />
-                          <span>Loading more live titles from Nxsha catalog...</span>
+                          <span>Loading more titles from TMDB...</span>
                         </div>
                       ) : (
                         <button
@@ -2380,7 +2335,7 @@ export default function App() {
                       <div>
                         <h3 className="text-sm font-display font-bold text-white">{item.title}</h3>
                         <p className="text-xs text-slate-400">
-                          {item.year} · ★ {item.rating}
+                          {item.year}{item.rating === undefined ? '' : ' · ★ ' + item.rating.toFixed(1)}
                         </p>
                       </div>
                       <div className="flex items-center gap-2">
@@ -2423,10 +2378,10 @@ export default function App() {
         )}
 
         {/* CREATE OR JOIN WATCH PARTY MODE SELECTOR */}
-        {(activeTab === 'create-party' || activeTab === 'watch-parties') && (
+        {(activeTab === 'create-party' || activeTab === 'watch-parties') && activeMedia && (
           <CreateJoinPartyView
             catalog={catalog}
-            defaultMedia={selectedMedia}
+            defaultMedia={activeMedia}
             userProfile={userProfile}
             onLaunchRoom={({ mode, roomCode, media }) => {
               setSelectedMedia(media);
@@ -2441,10 +2396,10 @@ export default function App() {
         )}
 
         {/* ACTIVE COUPLE CINEMA ROOM OR GROUP CINEMA ROOM */}
-        {(activeTab === 'couple-room' || activeTab === 'group-room') && (
+        {(activeTab === 'couple-room' || activeTab === 'group-room') && activeMedia && (
           <WatchPartyWorkspace
             catalog={catalog}
-            selectedMedia={selectedMedia}
+            selectedMedia={activeMedia}
             initialMode={activeTab === 'couple-room' ? 'couple' : 'group'}
             initialRoomCode={
               activeRoomCode || (activeTab === 'couple-room' ? 'LOVE-2026' : 'CLUB-4096')
@@ -2458,10 +2413,9 @@ export default function App() {
         )}
 
         {/* MEDIA DETAIL VIEW */}
-        {activeTab === 'media-detail' && (
+        {activeTab === 'media-detail' && selectedMedia && (
           <MediaDetailView
             item={selectedMedia}
-            relatedItems={catalog.filter((c) => c.id !== selectedMedia.id)}
             isInWatchlist={likedIds.includes(selectedMedia.id)}
             onBack={() => navigateToTab('home', '/')}
             onWatchSolo={handleStartWatching}
@@ -2501,18 +2455,24 @@ export default function App() {
         )}
 
         {/* AI COMPANION & CURATOR VIEW */}
-        {activeTab === 'ai-voice' && (
+        {activeTab === 'ai-voice' && activeMedia && (
           <AiVoiceAndConcierge
             catalog={catalog}
             history={watchHistory}
             recommendations={recommendations}
-            selectedMedia={selectedMedia}
+            selectedMedia={activeMedia}
             onSelectMediaAndPlay={(item) => {
               setSelectedMedia(item);
               setActiveTab('home');
               setIsTheaterOpen(true);
             }}
           />
+        )}
+
+        {((activeTab === 'create-party' || activeTab === 'watch-parties' || activeTab === 'couple-room' || activeTab === 'group-room' || activeTab === 'media-detail' || activeTab === 'ai-voice') && !activeMedia) && (
+          <div role="status" className="max-w-3xl mx-auto p-8 rounded-2xl bg-slate-900 border border-slate-800 text-center text-sm text-slate-300">
+            TMDB metadata is unavailable right now, so CineTogether cannot select a title for this view. Retry the catalog after configuring the server-side TMDB token.
+          </div>
         )}
 
         {/* OFFLINE VAULT & SOCIAL VIEW */}
@@ -2621,6 +2581,19 @@ export default function App() {
             Profile &amp; Settings
           </button>
         </div>
+        <section aria-labelledby="about-credits-heading" className="w-full border-t border-slate-800/70 pt-5 flex flex-wrap items-center gap-x-4 gap-y-3">
+          <h2 id="about-credits-heading" className="w-full text-sm font-semibold text-slate-200">About &amp; Credits</h2>
+          <a href="https://www.themoviedb.org/" target="_blank" rel="noopener noreferrer" aria-label="The Movie Database">
+            <img
+              src="https://www.themoviedb.org/assets/2/v4/logos/blue_long_2.svg"
+              alt="TMDB logo"
+              className="h-5 w-auto"
+              loading="lazy"
+            />
+          </a>
+          <p className="text-sm text-slate-200">This product uses the TMDB API but is not endorsed or certified by TMDB.</p>
+          <a href="https://www.themoviedb.org/" target="_blank" rel="noopener noreferrer" className="text-slate-300 hover:text-white">TMDB metadata and images</a>
+        </section>
       </footer>
 
       {/* Mobile Bottom Navigation Bar (<1024px) */}

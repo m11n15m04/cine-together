@@ -1,9 +1,10 @@
 import crypto from 'node:crypto';
-import { and, desc, eq, isNull, ne, sql } from 'drizzle-orm';
+import { and, desc, eq, gt, isNull, lte, ne, sql } from 'drizzle-orm';
 import { db } from './index.ts';
 import {
   chatMessages,
   nxshaCatalogCache,
+  tmdbCatalogCache,
   playbackStates,
   profiles,
   roomMembers,
@@ -69,6 +70,33 @@ export async function deleteExpiredNxshaCatalogCache(now = new Date()): Promise<
   const deleted = await db.delete(nxshaCatalogCache)
     .where(sql`${nxshaCatalogCache.expiresAt} <= ${now}`)
     .returning({ cacheKey: nxshaCatalogCache.cacheKey });
+  return deleted.length;
+}
+
+export async function getTmdbCatalogCache<T = unknown>(cacheKey: string, now = new Date()): Promise<T | null> {
+  const [cached] = await db
+    .select({ payload: tmdbCatalogCache.payload })
+    .from(tmdbCatalogCache)
+    .where(and(eq(tmdbCatalogCache.cacheKey, cacheKey), gt(tmdbCatalogCache.expiresAt, now)))
+    .limit(1);
+  return (cached?.payload as T | undefined) ?? null;
+}
+
+export async function putTmdbCatalogCache(cacheKey: string, payload: unknown, ttlMs: number, now = new Date()): Promise<void> {
+  if (!Number.isSafeInteger(ttlMs) || ttlMs <= 0) throw new Error('Catalog cache TTL must be a positive integer.');
+  await db
+    .insert(tmdbCatalogCache)
+    .values({ cacheKey, payload, refreshedAt: now, expiresAt: new Date(now.getTime() + ttlMs) })
+    .onConflictDoUpdate({
+      target: tmdbCatalogCache.cacheKey,
+      set: { payload, refreshedAt: now, expiresAt: new Date(now.getTime() + ttlMs) },
+    });
+}
+
+export async function deleteExpiredTmdbCatalogCache(now = new Date()): Promise<number> {
+  const deleted = await db.delete(tmdbCatalogCache)
+    .where(lte(tmdbCatalogCache.expiresAt, now))
+    .returning({ cacheKey: tmdbCatalogCache.cacheKey });
   return deleted.length;
 }
 

@@ -187,6 +187,8 @@ test('buildNxshaEmbedUrl and MediaProviderAdapter construct valid URLs and hones
     season: 1,
     episode: 4,
     durationMinutes: 52,
+    embedUrl: 'https://nxsha.space/embed/tv/204988/1/4',
+    openOnProviderUrl: 'https://nxsha.space/watch/tv/204988/1/4',
   });
   assert.equal(externalAdapter.supportsProgrammaticSync, false);
   assert.ok(externalAdapter.syncLimitationNotice?.includes('Sync unavailable'));

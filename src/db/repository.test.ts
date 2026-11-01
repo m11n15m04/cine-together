@@ -41,6 +41,7 @@ test('PostgreSQL watchlist, profile, history, room, and chat persistence', {
     assert.equal((await checkDatabaseConnection()).available, true);
 
     const cacheNow = new Date();
+    const tmdbCacheKey = 'test-tmdb-cache-' + crypto.randomUUID();
     await repository.putNxshaCatalogCache(cacheKey, { providerId: 'nxsha-provider-id' }, 1_000, cacheNow);
     assert.deepEqual(await repository.getNxshaCatalogCache(cacheKey, new Date(cacheNow.getTime() + 500)), {
       providerId: 'nxsha-provider-id',
@@ -51,6 +52,16 @@ test('PostgreSQL watchlist, profile, history, room, and chat persistence', {
       providerId: 'refreshed-provider-id',
     });
     assert.ok((await repository.deleteExpiredNxshaCatalogCache(new Date(cacheNow.getTime() + 2_000))) >= 1);
+    await repository.putTmdbCatalogCache(tmdbCacheKey, { id: 238, title: 'Provider metadata' }, 1_000, cacheNow);
+    assert.deepEqual(await repository.getTmdbCatalogCache(tmdbCacheKey, new Date(cacheNow.getTime() + 500)), {
+      id: 238, title: 'Provider metadata',
+    });
+    assert.equal(await repository.getTmdbCatalogCache(tmdbCacheKey, new Date(cacheNow.getTime() + 1_000)), null);
+    await repository.putTmdbCatalogCache(tmdbCacheKey, { id: 238, title: 'Refreshed metadata' }, 2_000, cacheNow);
+    assert.deepEqual(await repository.getTmdbCatalogCache(tmdbCacheKey, new Date(cacheNow.getTime() + 1_500)), {
+      id: 238, title: 'Refreshed metadata',
+    });
+    assert.ok((await repository.deleteExpiredTmdbCatalogCache(new Date(cacheNow.getTime() + 2_000))) >= 1);
 
     const watchlistItem = await repository.addUserWatchlistItem({
       userId: uid, mediaId: 'test-film', mediaTitle: 'Test Film', mediaType: 'movie', posterUrl: '', year: '2026', rating: 7.5,

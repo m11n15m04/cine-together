@@ -1,5 +1,4 @@
-import { BRAND_CONFIG, MediaCategory, PlayerProviderType } from '../types';
-import { buildNxshaEmbedUrl } from './streamEngine';
+import { MediaCategory, PlayerProviderType } from '../types';
 
 export type PlaybackAdapterEventType = 'play' | 'pause' | 'seek' | 'timeupdate' | 'ended';
 
@@ -60,7 +59,7 @@ export class SyncedStudioVideoAdapter implements MediaProviderAdapter {
   private listeners: Set<(event: PlaybackAdapterEvent) => void> = new Set();
   private cleanupFns: Array<() => void> = [];
 
-  constructor(streamUrl: string, durationMinutes = 120, openOnProviderUrl = 'https://nxsha.space') {
+  constructor(streamUrl: string, durationMinutes = 0, openOnProviderUrl = '') {
     this.streamUrl = streamUrl;
     this.openOnProviderUrl = openOnProviderUrl;
     this.fallbackDurationSeconds = Math.max(60, durationMinutes * 60);
@@ -223,56 +222,38 @@ export class NxshaExternalEmbedAdapter implements MediaProviderAdapter {
   public readonly syncLimitationNotice =
     'Sync unavailable for this external cross-origin player — use the 3-2-1 Room Countdown for manual coordination, Open on Provider if embedding is blocked, or switch to Synced Studio Stream for automatic WebSocket lockstep.';
 
-  private mediaType: MediaCategory;
-  private tmdbId: number;
-  private season: number;
-  private episode: number;
+  private embedUrl: string;
+  private openUrl: string;
   private durationSeconds: number;
   private manualTimeSeconds = 0;
 
   constructor(
-    mediaType: MediaCategory,
-    tmdbId: number,
-    season = 1,
-    episode = 1,
-    durationMinutes = 120
+    embedUrl: string,
+    openUrl: string,
+    durationMinutes = 0
   ) {
-    this.mediaType = mediaType;
-    this.tmdbId = tmdbId;
-    this.season = season;
-    this.episode = episode;
-    this.durationSeconds = Math.max(60, durationMinutes * 60);
+    this.embedUrl = embedUrl;
+    this.openUrl = openUrl;
+    this.durationSeconds = Number.isFinite(durationMinutes) && durationMinutes > 0 ? durationMinutes * 60 : 0;
   }
 
   getCapabilities(): PlaybackCapabilities {
     return {
-      providerLabel: 'Nxsha External Provider (/embed)',
-      canEmbedInFrame: true,
+      providerLabel: 'Configured external provider',
+      canEmbedInFrame: Boolean(this.embedUrl),
       supportsProgrammaticSync: false,
       supportsSeekAndTimeEvents: false,
       requiresManualCoordination: true,
-      openOnProviderUrl: this.getOpenOnProviderUrl(),
+      openOnProviderUrl: this.openUrl,
     };
   }
 
   getEmbedUrl(): string {
-    return buildNxshaEmbedUrl(
-      BRAND_CONFIG.embedBaseUrl,
-      this.mediaType,
-      this.tmdbId,
-      this.season,
-      this.episode
-    );
+    return this.embedUrl;
   }
 
   getOpenOnProviderUrl(): string {
-    const cleanBase = (BRAND_CONFIG.embedBaseUrl || 'https://nxsha.space').replace(/\/+$/, '');
-    if (this.mediaType === 'movie') {
-      return `${cleanBase}/watch/movie/${this.tmdbId}`;
-    }
-    const safeSeason = Math.max(1, Math.floor(this.season || 1));
-    const safeEpisode = Math.max(1, Math.floor(this.episode || 1));
-    return `${cleanBase}/watch/tv/${this.tmdbId}/${safeSeason}/${safeEpisode}`;
+    return this.openUrl;
   }
 
   initializePlayer(_element: HTMLVideoElement | HTMLIFrameElement | null): void {
@@ -308,6 +289,34 @@ export class NxshaExternalEmbedAdapter implements MediaProviderAdapter {
   }
 }
 
+export class MetadataOnlyAdapter implements MediaProviderAdapter {
+  public readonly providerType: PlayerProviderType = 'metadata-only';
+  public readonly supportsProgrammaticSync = false;
+  public readonly syncLimitationNotice = 'Playback is unavailable because no authorized source is configured.';
+
+  constructor(private readonly openUrl = '') {}
+  getCapabilities(): PlaybackCapabilities {
+    return {
+      providerLabel: 'Metadata only',
+      canEmbedInFrame: false,
+      supportsProgrammaticSync: false,
+      supportsSeekAndTimeEvents: false,
+      requiresManualCoordination: false,
+      openOnProviderUrl: this.openUrl,
+    };
+  }
+  getEmbedUrl(): string { return ''; }
+  getOpenOnProviderUrl(): string { return this.openUrl; }
+  initializePlayer(_element: HTMLVideoElement | HTMLIFrameElement | null): void {}
+  async play(): Promise<void> {}
+  pause(): void {}
+  seekTo(_seconds: number): void {}
+  getCurrentTime(): number { return 0; }
+  getDuration(): number { return 0; }
+  onPlaybackEvent(_callback: (event: PlaybackAdapterEvent) => void): () => void { return () => {}; }
+  destroy(): void {}
+}
+
 export function createMediaProviderAdapter(options: {
   providerType: PlayerProviderType;
   streamUrl: string;
@@ -317,19 +326,21 @@ export function createMediaProviderAdapter(options: {
   episode?: number;
   durationMinutes?: number;
   openOnProviderUrl?: string;
+  embedUrl?: string;
 }): MediaProviderAdapter {
-  if (options.providerType === 'nxsha-embed') {
+  if (options.providerType === 'nxsha-embed' && options.embedUrl && options.openOnProviderUrl) {
     return new NxshaExternalEmbedAdapter(
-      options.mediaType,
-      options.tmdbId,
-      options.season || 1,
-      options.episode || 1,
-      options.durationMinutes || 120
+      options.embedUrl,
+      options.openOnProviderUrl,
+      options.durationMinutes
     );
+  }
+  if (options.providerType === 'metadata-only' || options.providerType === 'nxsha-embed') {
+    return new MetadataOnlyAdapter(options.openOnProviderUrl);
   }
   return new SyncedStudioVideoAdapter(
     options.streamUrl,
-    options.durationMinutes || 120,
-    options.openOnProviderUrl || 'https://nxsha.space'
+    options.durationMinutes,
+    options.openOnProviderUrl || ''
   );
 }

@@ -515,7 +515,6 @@ export const CreateJoinPartyView: React.FC<CreateJoinPartyViewProps> = ({
 
 interface MediaDetailViewProps {
   item: MediaItem;
-  relatedItems: MediaItem[];
   isInWatchlist: boolean;
   onBack: () => void;
   onWatchSolo: (item: MediaItem) => void;
@@ -527,7 +526,6 @@ interface MediaDetailViewProps {
 
 export const MediaDetailView: React.FC<MediaDetailViewProps> = ({
   item,
-  relatedItems,
   isInWatchlist,
   onBack,
   onWatchSolo,
@@ -543,6 +541,30 @@ export const MediaDetailView: React.FC<MediaDetailViewProps> = ({
   const [episodesLoading, setEpisodesLoading] = useState<boolean>(false);
   const [episodeSourceLabel, setEpisodeSourceLabel] = useState<string>('');
   const [copiedShare, setCopiedShare] = useState<boolean>(false);
+  const [relatedItems, setRelatedItems] = useState<MediaItem[]>([]);
+  const [recommendationsLoading, setRecommendationsLoading] = useState<boolean>(false);
+  const [recommendationsError, setRecommendationsError] = useState<string | null>(null);
+
+  useEffect(() => {
+    setRelatedItems([]);
+    setRecommendationsError(null);
+    if (item.mediaType !== 'movie') return;
+    const controller = new AbortController();
+    setRecommendationsLoading(true);
+    fetch('/api/catalog/movies/' + encodeURIComponent(String(item.tmdbId)) + '/recommendations?page=1', { signal: controller.signal })
+      .then(async (response) => {
+        const payload = await response.json().catch(() => null) as { items?: MediaItem[]; error?: string } | null;
+        if (!response.ok) throw new Error(payload?.error || 'TMDB recommendations are unavailable.');
+        setRelatedItems(Array.isArray(payload?.items) ? payload.items : []);
+      })
+      .catch((error: unknown) => {
+        if (!controller.signal.aborted) setRecommendationsError(error instanceof Error ? error.message : 'TMDB recommendations are unavailable.');
+      })
+      .finally(() => {
+        if (!controller.signal.aborted) setRecommendationsLoading(false);
+      });
+    return () => controller.abort();
+  }, [item.mediaType, item.tmdbId]);
 
   const handleShare = () => {
     const shareUrl = window.location.href;
@@ -559,6 +581,24 @@ export const MediaDetailView: React.FC<MediaDetailViewProps> = ({
     }
   };
 
+  const loadSeasonEpisodes = async (seasonNumber: number) => {
+    setEpisodesLoading(true);
+    try {
+      const response = await fetch(
+        '/api/catalog/tv/' + encodeURIComponent(String(item.tmdbId)) + '/seasons/' + seasonNumber + '/episodes'
+      );
+      const data = await response.json().catch(() => null) as { season?: TvSeasonDetail } | null;
+      if (!response.ok || !data?.season) throw new Error('Season metadata unavailable');
+      setSeasons((current) => current.map((season) => season.seasonNumber === seasonNumber ? data.season! : season));
+      setSelectedEpisodeNum(data.season.episodes[0]?.episodeNumber || 1);
+      setEpisodeSourceLabel('TMDB series metadata');
+    } catch {
+      setEpisodeSourceLabel('Episode metadata is currently unavailable.');
+    } finally {
+      setEpisodesLoading(false);
+    }
+  };
+
   useEffect(() => {
     if (!isEpisodic) {
       setSeasons([]);
@@ -569,20 +609,25 @@ export const MediaDetailView: React.FC<MediaDetailViewProps> = ({
     setSelectedSeasonNum(1);
     setSelectedEpisodeNum(1);
 
-    fetch(
-      `/api/nxsha/tv/${encodeURIComponent(String(item.tmdbId))}/seasons?title=${encodeURIComponent(item.title)}`
-    )
-      .then((r) => r.json())
-      .then((data) => {
+    fetch('/api/catalog/tv/' + encodeURIComponent(String(item.tmdbId)) + '/seasons')
+      .then(async (response) => {
+        const data = await response.json().catch(() => null) as { seasons?: Array<Omit<TvSeasonDetail, 'episodes'>> } | null;
+        if (!response.ok || !Array.isArray(data?.seasons)) throw new Error('TMDB series metadata unavailable');
+        const list: TvSeasonDetail[] = data.seasons
+          .filter((season) => season.seasonNumber > 0)
+          .map((season) => ({ ...season, episodes: [] }));
         if (!active) return;
-        if (Array.isArray(data.seasons) && data.seasons.length > 0) {
-          setSeasons(data.seasons);
-          setSelectedSeasonNum(data.seasons[0].seasonNumber || 1);
-          setSelectedEpisodeNum(data.seasons[0].episodes?.[0]?.episodeNumber || 1);
-          setEpisodeSourceLabel(String(data.source || 'Nxsha Episodic Stream Resolver'));
+        setSeasons(list);
+        const firstSeason = list[0];
+        if (firstSeason) {
+          setSelectedSeasonNum(firstSeason.seasonNumber);
+          await loadSeasonEpisodes(firstSeason.seasonNumber);
         }
+        setEpisodeSourceLabel('TMDB series metadata');
       })
-      .catch(() => {})
+      .catch(() => {
+        if (active) setEpisodeSourceLabel('TMDB season metadata is unavailable.');
+      })
       .finally(() => {
         if (active) setEpisodesLoading(false);
       });
@@ -590,7 +635,7 @@ export const MediaDetailView: React.FC<MediaDetailViewProps> = ({
     return () => {
       active = false;
     };
-  }, [item.tmdbId, item.title, isEpisodic]);
+  }, [item.tmdbId, isEpisodic]);
 
   const currentSeason =
     seasons.find((s) => s.seasonNumber === selectedSeasonNum) || seasons[0] || null;
@@ -599,14 +644,7 @@ export const MediaDetailView: React.FC<MediaDetailViewProps> = ({
     currentSeason?.episodes?.[0] ||
     null;
 
-  const buildEpisodicMediaItem = (seasonNumber: number, episodeNumber: number): MediaItem => {
-    if (!isEpisodic) return item;
-    return {
-      ...item,
-      nxshaEmbedUrl: `https://nxsha.space/embed/tv/${item.tmdbId}/${seasonNumber}/${episodeNumber}`,
-      nxshaWatchUrl: `https://nxsha.space/watch/tv/${item.tmdbId}/${seasonNumber}/${episodeNumber}`,
-    };
-  };
+  const buildEpisodicMediaItem = (_seasonNumber: number, _episodeNumber: number): MediaItem => item;
 
   return (
     <section className="space-y-8" aria-label={`${item.title} Details`}>
@@ -639,7 +677,9 @@ export const MediaDetailView: React.FC<MediaDetailViewProps> = ({
             <span className="px-2.5 py-1 rounded-md bg-slate-900/90 text-slate-300 border border-slate-700 uppercase">
               {item.mediaType}
             </span>
-            <span className="text-amber-400 font-semibold">★ {item.rating.toFixed(1)}</span>
+            <span className="text-amber-400 font-semibold">
+              {item.rating === undefined ? 'Rating unavailable' : `★ ${item.rating.toFixed(1)}`}
+            </span>
             <span className="text-slate-400">·</span>
             <span className="text-slate-300">{item.year}</span>
             <span className="text-slate-400">·</span>
@@ -647,7 +687,7 @@ export const MediaDetailView: React.FC<MediaDetailViewProps> = ({
             <span className="text-slate-400">·</span>
             <span className="text-slate-300">
               {item.mediaType === 'movie'
-                ? `${item.durationMinutes}m`
+                ? item.durationMinutes === undefined ? 'Runtime unavailable' : `${item.durationMinutes}m`
                 : `${seasons.length || item.seasons || 1} Seasons`}
             </span>
             {item.coupleScore && (
@@ -667,7 +707,7 @@ export const MediaDetailView: React.FC<MediaDetailViewProps> = ({
               </span>
             ) : (
               <span className="px-2.5 py-0.5 rounded-full bg-rose-500/20 text-rose-300 border border-rose-500/30 text-[11px] inline-flex items-center gap-1">
-                Theatrical / Metadata Only (No Stream)
+                Playback not verified
               </span>
             )}
           </div>
@@ -692,12 +732,8 @@ export const MediaDetailView: React.FC<MediaDetailViewProps> = ({
               <span className="text-slate-200 font-medium">{item.genres.join(' · ')}</span>
             </div>
             <div>
-              <span className="text-slate-500">Nxsha Route:</span>{' '}
-              <span className="text-violet-300 font-mono">
-                {isEpisodic
-                  ? `/embed/tv/${item.tmdbId}/${selectedSeasonNum}/${selectedEpisodeNum}`
-                  : `/embed/movie/${item.tmdbId}`}
-              </span>
+              <span className="text-slate-500">Metadata provider:</span>{' '}
+              <span className="text-violet-300 font-mono">TMDB</span>
             </div>
           </div>
 
@@ -720,7 +756,7 @@ export const MediaDetailView: React.FC<MediaDetailViewProps> = ({
               <Play className="w-4 h-4 fill-current" />
               <span>
                 {item.sourceAvailability === 'unavailable' || item.playbackStatus === 'metadata-only'
-                  ? 'Stream Unavailable (Theatrical Only)'
+                  ? 'Playback unavailable'
                   : isEpisodic
                   ? `Watch S${selectedSeasonNum}·E${selectedEpisodeNum} Now`
                   : 'Watch Solo Now'}
@@ -790,19 +826,17 @@ export const MediaDetailView: React.FC<MediaDetailViewProps> = ({
               )}
             </button>
 
-            <a
-              href={
-                isEpisodic
-                  ? `https://nxsha.space/watch/tv/${item.tmdbId}/${selectedSeasonNum}/${selectedEpisodeNum}`
-                  : item.nxshaWatchUrl
-              }
-              target="_blank"
-              rel="noopener noreferrer"
-              className="inline-flex items-center gap-1.5 px-3.5 py-3 rounded-xl bg-slate-950/90 hover:bg-slate-800 border border-slate-800 text-xs font-medium text-slate-300"
-            >
-              <ExternalLink className="w-3.5 h-3.5" />
-              <span>Open on Nxsha</span>
-            </a>
+            {item.playbackStatus === 'external-watch' && item.authorizedProviderUrl && (
+              <a
+                href={item.authorizedProviderUrl}
+                target="_blank"
+                rel="noopener noreferrer"
+                className="inline-flex items-center gap-1.5 px-3.5 py-3 rounded-xl bg-slate-950/90 hover:bg-slate-800 border border-slate-800 text-xs font-medium text-slate-300"
+              >
+                <ExternalLink className="w-3.5 h-3.5" />
+                <span>Open authorized provider</span>
+              </a>
+            )}
           </div>
           </div>
         </div>
@@ -865,7 +899,7 @@ export const MediaDetailView: React.FC<MediaDetailViewProps> = ({
                   <div className="space-y-1 max-w-2xl">
                     <div className="text-xs font-mono text-violet-300">
                       SELECTED EPISODE · S{currentEpisode.seasonNumber} · E{currentEpisode.episodeNumber} ·{' '}
-                      {currentEpisode.durationMinutes}m · {currentEpisode.airDate}
+                      {currentEpisode.durationMinutes === undefined ? 'Runtime unavailable' : `${currentEpisode.durationMinutes}m`} · {currentEpisode.airDate}
                     </div>
                     <div className="text-sm font-display font-bold text-white">
                       {currentEpisode.title}
@@ -875,6 +909,7 @@ export const MediaDetailView: React.FC<MediaDetailViewProps> = ({
                   <div className="flex items-center gap-2">
                     <button
                       type="button"
+                      disabled={item.playbackStatus === 'metadata-only' || item.sourceAvailability === 'unavailable'}
                       onClick={() =>
                         onWatchSolo(
                           buildEpisodicMediaItem(
@@ -883,9 +918,11 @@ export const MediaDetailView: React.FC<MediaDetailViewProps> = ({
                           )
                         )
                       }
-                      className="px-3.5 py-2 rounded-xl bg-violet-600 hover:bg-violet-500 text-white text-xs font-semibold"
+                      className="px-3.5 py-2 rounded-xl bg-violet-600 hover:bg-violet-500 disabled:bg-slate-800 disabled:text-slate-500 text-white text-xs font-semibold"
                     >
-                      Play S{currentEpisode.seasonNumber}·E{currentEpisode.episodeNumber}
+                      {item.playbackStatus === 'metadata-only' || item.sourceAvailability === 'unavailable'
+                        ? 'Playback unavailable'
+                        : `Play S${currentEpisode.seasonNumber}·E${currentEpisode.episodeNumber}`}
                     </button>
                     {currentSeason.episodes.length > currentEpisode.episodeNumber && (
                       <button
@@ -924,18 +961,19 @@ export const MediaDetailView: React.FC<MediaDetailViewProps> = ({
                         </div>
                         <p className="text-xs text-slate-400 line-clamp-2">{ep.overview}</p>
                         <div className="text-[11px] font-mono text-slate-500">
-                          {ep.durationMinutes}m · Air Date: {ep.airDate}
+                          {ep.durationMinutes === undefined ? 'Runtime unavailable' : `${ep.durationMinutes}m`} · Air Date: {ep.airDate}
                         </div>
                       </div>
                       <button
                         type="button"
+                        disabled={item.playbackStatus === 'metadata-only' || item.sourceAvailability === 'unavailable'}
                         onClick={(e) => {
                           e.stopPropagation();
                           setSelectedEpisodeNum(ep.episodeNumber);
                           onWatchSolo(buildEpisodicMediaItem(ep.seasonNumber, ep.episodeNumber));
                         }}
                         aria-label={`Play Season ${ep.seasonNumber} Episode ${ep.episodeNumber}`}
-                        className="p-2 rounded-xl bg-violet-600/20 hover:bg-violet-600 text-violet-200 hover:text-white shrink-0 transition-colors"
+                        className="p-2 rounded-xl bg-violet-600/20 hover:bg-violet-600 text-violet-200 hover:text-white disabled:bg-slate-800 disabled:text-slate-500 disabled:cursor-not-allowed shrink-0 transition-colors"
                       >
                         <Play className="w-3.5 h-3.5 fill-current" />
                       </button>
@@ -949,9 +987,15 @@ export const MediaDetailView: React.FC<MediaDetailViewProps> = ({
       )}
 
       {/* More Like This */}
-      <div className="space-y-4">
+      {item.mediaType === 'movie' && <div className="space-y-4">
         <h2 className="text-lg font-display font-bold text-white">More Like {item.title}</h2>
-        <div className="grid grid-cols-2 sm:grid-cols-3 lg:grid-cols-5 gap-4">
+        {recommendationsLoading ? (
+          <p role="status" className="text-xs text-slate-400">Loading recommendations from TMDB…</p>
+        ) : recommendationsError ? (
+          <p role="status" className="text-xs text-rose-300">{recommendationsError}</p>
+        ) : relatedItems.length === 0 ? (
+          <p role="status" className="text-xs text-slate-400">TMDB has no recommendations for this title.</p>
+        ) : <div className="grid grid-cols-2 sm:grid-cols-3 lg:grid-cols-5 gap-4">
           {relatedItems.slice(0, 5).map((rel) => (
             <button
               key={rel.id}
@@ -969,13 +1013,13 @@ export const MediaDetailView: React.FC<MediaDetailViewProps> = ({
               <div className="p-3">
                 <div className="text-xs font-semibold text-white truncate">{rel.title}</div>
                 <div className="text-[11px] text-slate-400">
-                  {rel.year} · ★ {rel.rating}
+                  {rel.year}{rel.rating === undefined ? ' · Rating unavailable' : ` · ★ ${rel.rating.toFixed(1)}`}
                 </div>
               </div>
             </button>
           ))}
-        </div>
-      </div>
+        </div>}
+      </div>}
     </section>
   );
 };

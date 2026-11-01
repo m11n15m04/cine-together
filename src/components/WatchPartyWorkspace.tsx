@@ -259,8 +259,11 @@ export const WatchPartyWorkspace: React.FC<WatchPartyWorkspaceProps> = ({
     }
     let active = true;
     const timer = setTimeout(() => {
-      fetch(`/api/nxsha/search?q=${encodeURIComponent(q)}`)
-        .then((r) => r.json())
+      fetch(`/api/catalog/search?q=${encodeURIComponent(q)}&type=all`)
+        .then(async (response) => {
+          if (!response.ok) throw new Error('Catalog search unavailable');
+          return response.json();
+        })
         .then((data) => {
           if (!active) return;
           if (Array.isArray(data.items)) {

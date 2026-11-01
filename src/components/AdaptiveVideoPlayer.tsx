@@ -70,16 +70,15 @@ export const AdaptiveVideoPlayer: React.FC<AdaptiveVideoPlayerProps> = ({
   const hasAuthorizedStudioSource = Boolean(
     item.authorizedPlaybackSource ||
       item.hlsUrl ||
-      (item.streamUrl &&
-        item.streamUrl.startsWith('http') &&
-        !item.streamUrl.includes('/api/media/stream/')) ||
-      item.playbackStatus === 'synced-ready'
+      (item.streamUrl && item.streamUrl.startsWith('https://') && !item.streamUrl.includes('/api/media/stream/'))
   );
 
   // Preferred initial provider
   const initialProvider: PlayerProviderType = hasAuthorizedStudioSource
     ? 'synced-studio'
-    : 'nxsha-embed';
+    : item.nxshaEmbedUrl && item.nxshaWatchUrl
+    ? 'nxsha-embed'
+    : 'metadata-only';
 
   const [providerType, setProviderType] = useState<PlayerProviderType>(initialProvider);
   const [selectedSeason, setSelectedSeason] = useState<number>(season || 1);
@@ -88,7 +87,7 @@ export const AdaptiveVideoPlayer: React.FC<AdaptiveVideoPlayerProps> = ({
   // Video playback states
   const [isPlaying, setIsPlaying] = useState<boolean>(externalIsPlaying ?? false);
   const [currentTime, setCurrentTime] = useState<number>(externalTimeSeconds ?? 0);
-  const [duration, setDuration] = useState<number>(item.durationMinutes * 60 || 7200);
+  const [duration, setDuration] = useState<number>(item.durationMinutes ? item.durationMinutes * 60 : 0);
   const [volume, setVolume] = useState<number>(1);
   const [isMuted, setIsMuted] = useState<boolean>(false);
   const [subtitlesOn, setSubtitlesOn] = useState<boolean>(false);
@@ -137,13 +136,14 @@ export const AdaptiveVideoPlayer: React.FC<AdaptiveVideoPlayerProps> = ({
     () =>
       createMediaProviderAdapter({
         providerType,
-        streamUrl: activeVideoSource || item.streamUrl,
+        streamUrl: activeVideoSource || item.streamUrl || '',
         mediaType: item.mediaType,
         tmdbId: item.tmdbId,
         season: selectedSeason,
         episode: selectedEpisode,
         durationMinutes: item.durationMinutes,
-        openOnProviderUrl: item.nxshaWatchUrl,
+        openOnProviderUrl: item.nxshaWatchUrl || item.authorizedProviderUrl || '',
+        embedUrl: item.nxshaEmbedUrl,
       }),
     [
       providerType,
@@ -155,6 +155,8 @@ export const AdaptiveVideoPlayer: React.FC<AdaptiveVideoPlayerProps> = ({
       selectedEpisode,
       item.durationMinutes,
       item.nxshaWatchUrl,
+      item.nxshaEmbedUrl,
+      item.authorizedProviderUrl,
     ]
   );
 
@@ -164,12 +166,12 @@ export const AdaptiveVideoPlayer: React.FC<AdaptiveVideoPlayerProps> = ({
   // Sync state if item changes
   useEffect(() => {
     if (!hasAuthorizedStudioSource && providerType === 'synced-studio') {
-      setProviderType('nxsha-embed');
+      setProviderType(item.nxshaEmbedUrl && item.nxshaWatchUrl ? 'nxsha-embed' : 'metadata-only');
     }
     setVideoError(null);
     setIsVideoLoading(true);
     setIframeLoading(true);
-  }, [item.id, hasAuthorizedStudioSource]);
+  }, [item.id, hasAuthorizedStudioSource, item.nxshaEmbedUrl, item.nxshaWatchUrl]);
 
   useEffect(() => {
     if (typeof season === 'number' && season !== selectedSeason) {
@@ -527,7 +529,11 @@ export const AdaptiveVideoPlayer: React.FC<AdaptiveVideoPlayerProps> = ({
             />
             {providerType === 'synced-studio' && hasAuthorizedStudioSource
               ? 'Verified Studio Stream · Auto-Sync'
-              : 'External Frame · Manual Sync'}
+              : providerType === 'nxsha-embed'
+              ? 'Configured External Frame · Manual Sync'
+              : item.authorizedProviderUrl
+              ? 'Authorized External Watch · Manual Sync'
+              : 'Playback Unavailable · Metadata Only'}
           </span>
 
           {item.mediaType !== 'movie' && (
@@ -610,7 +616,7 @@ export const AdaptiveVideoPlayer: React.FC<AdaptiveVideoPlayerProps> = ({
             <button
               type="button"
               onClick={() => setProviderType('nxsha-embed')}
-              disabled={isOfflineMode}
+              disabled={isOfflineMode || !item.nxshaEmbedUrl || !item.nxshaWatchUrl}
               className={`px-3 py-1 text-xs font-medium rounded-lg transition-colors whitespace-nowrap shrink-0 ${
                 providerType === 'nxsha-embed'
                   ? 'bg-gradient-to-r from-violet-600 to-fuchsia-600 text-white font-semibold shadow-sm'
@@ -622,17 +628,19 @@ export const AdaptiveVideoPlayer: React.FC<AdaptiveVideoPlayerProps> = ({
           </div>
 
           {/* Open on Provider Fallback Link */}
-          <a
-            href={providerWatchUrl}
-            target="_blank"
-            rel="noopener noreferrer"
-            data-testid="open-on-provider-fallback"
-            title="Open official streaming page directly on provider website"
-            className="inline-flex items-center gap-1.5 px-3 py-1.5 text-xs font-semibold text-violet-200 hover:text-white bg-violet-600/20 hover:bg-violet-600/35 border border-violet-500/30 rounded-xl transition-colors whitespace-nowrap shrink-0"
-          >
-            <span>Open Provider</span>
-            <ExternalLink className="w-3.5 h-3.5" />
-          </a>
+          {providerWatchUrl && (
+            <a
+              href={providerWatchUrl}
+              target="_blank"
+              rel="noopener noreferrer"
+              data-testid="open-on-provider-fallback"
+              title="Open the explicitly configured authorized provider"
+              className="inline-flex items-center gap-1.5 px-3 py-1.5 text-xs font-semibold text-violet-200 hover:text-white bg-violet-600/20 hover:bg-violet-600/35 border border-violet-500/30 rounded-xl transition-colors whitespace-nowrap shrink-0"
+            >
+              <span>Open Authorized Provider</span>
+              <ExternalLink className="w-3.5 h-3.5" />
+            </a>
+          )}
 
           {onClose && (
             <button
@@ -738,13 +746,6 @@ export const AdaptiveVideoPlayer: React.FC<AdaptiveVideoPlayerProps> = ({
                         <RotateCcw className="w-3.5 h-3.5" />
                         <span>Retry Stream</span>
                       </button>
-                      <button
-                        type="button"
-                        onClick={() => setProviderType('nxsha-embed')}
-                        className="inline-flex items-center gap-2 px-4 py-2 rounded-xl bg-slate-800 hover:bg-slate-700 text-slate-200 text-xs transition-colors"
-                      >
-                        <span>Switch to External Embed</span>
-                      </button>
                     </div>
                   </div>
                 )}
@@ -779,59 +780,54 @@ export const AdaptiveVideoPlayer: React.FC<AdaptiveVideoPlayerProps> = ({
                     Studio Source Unavailable for "{item.title}"
                   </h3>
                   <p className="text-xs text-slate-300 leading-relaxed">
-                    This title does not have a verified, authorized Studio Stream configured. To
-                    prevent displaying synthetic waveforms or unverified media, please switch to the
-                    External Provider Embed or open the official streaming platform.
+                    No authorized media source is configured for this title. TMDB metadata does not
+                    establish playback availability.
                   </p>
                 </div>
                 <div className="flex flex-wrap items-center justify-center gap-3">
-                  <button
-                    type="button"
-                    onClick={() => setProviderType('nxsha-embed')}
-                    className="inline-flex items-center gap-2 px-5 py-2.5 rounded-xl bg-gradient-to-r from-violet-600 to-fuchsia-600 text-white font-semibold text-xs shadow-lg transition-transform hover:scale-105"
-                  >
-                    <Play className="w-4 h-4 fill-current" />
-                    <span>Watch via External Embed</span>
-                  </button>
-                  <a
-                    href={providerWatchUrl}
-                    target="_blank"
-                    rel="noopener noreferrer"
-                    className="inline-flex items-center gap-2 px-5 py-2.5 rounded-xl bg-slate-800 hover:bg-slate-700 text-white font-semibold text-xs shadow-lg"
-                  >
-                    <span>Open on Provider</span>
-                    <ExternalLink className="w-4 h-4" />
-                  </a>
+                  {providerWatchUrl && (
+                    <a
+                      href={providerWatchUrl}
+                      target="_blank"
+                      rel="noopener noreferrer"
+                      className="inline-flex items-center gap-2 px-5 py-2.5 rounded-xl bg-slate-800 hover:bg-slate-700 text-white font-semibold text-xs shadow-lg"
+                    >
+                      <span>Open Authorized Provider</span>
+                      <ExternalLink className="w-4 h-4" />
+                    </a>
+                  )}
                 </div>
               </div>
             )}
           </>
-        ) : showEmbedFallbackCard || item.playbackStatus === 'metadata-only' ? (
+        ) : showEmbedFallbackCard || item.playbackStatus === 'metadata-only' || providerType === 'metadata-only' ? (
           /* External Embed Blocked Fallback Screen */
           <div className="w-full h-full p-8 bg-gradient-to-br from-slate-950 via-violet-950/30 to-slate-950 flex flex-col items-center justify-center text-center space-y-4">
             <ShieldAlert className="w-12 h-12 text-violet-400" />
             <div className="space-y-1.5 max-w-lg">
               <h3 className="text-lg font-display font-bold text-white">
-                {item.playbackStatus === 'metadata-only'
-                  ? `Upcoming / Discovery Title (${item.title})`
+                {item.playbackStatus === 'metadata-only' || providerType === 'metadata-only'
+                  ? `Playback Unavailable (${item.title})`
                   : `External Provider Direct Watch (${item.title})`}
               </h3>
               <p className="text-xs text-slate-300 leading-relaxed">
-                {item.playbackStatus === 'metadata-only'
-                  ? `"${item.title}" is listed in the discovery catalog with official release year ${item.year}. No authorized streaming broadcast is currently playable.`
-                  : `Third-party iframe playback may be restricted by browser tracking protection, Content-Security-Policy (CSP), or X-Frame-Options headers. Open the stream directly on the provider's official portal.`}
+                {item.playbackStatus === 'metadata-only' || providerType === 'metadata-only'
+                  ? `TMDB provides metadata for "${item.title}". CineTogether has no authorized playback source configured for this title.`
+                  : `This configured external source does not expose synchronized playback controls. Coordinate playback manually.`}
               </p>
             </div>
             <div className="flex flex-wrap items-center justify-center gap-3">
-              <a
-                href={providerWatchUrl}
-                target="_blank"
-                rel="noopener noreferrer"
-                className="inline-flex items-center gap-2 px-5 py-2.5 rounded-xl bg-white text-slate-950 font-semibold text-xs shadow-lg hover:bg-slate-200 transition-colors"
-              >
-                <span>Open on Provider Page</span>
-                <ExternalLink className="w-4 h-4" />
-              </a>
+              {providerWatchUrl && (
+                <a
+                  href={providerWatchUrl}
+                  target="_blank"
+                  rel="noopener noreferrer"
+                  className="inline-flex items-center gap-2 px-5 py-2.5 rounded-xl bg-white text-slate-950 font-semibold text-xs shadow-lg hover:bg-slate-200 transition-colors"
+                >
+                  <span>Open Authorized Provider</span>
+                  <ExternalLink className="w-4 h-4" />
+                </a>
+              )}
               {hasAuthorizedStudioSource && (
                 <button
                   type="button"

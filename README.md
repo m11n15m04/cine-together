@@ -32,7 +32,7 @@ npm start
 
 ## Environment variables
 
-Copy `.env.example` and configure only the features you use. Nxsha catalog API credentials are intentionally absent until Nxsha provides an official catalog API contract and authorization.
+Copy `.env.example` and configure only the features you use. TMDB catalog access uses a server-only API Read Access Token. Never put this token in a `VITE_*` variable or frontend bundle.
 
 | Variable | Purpose |
 | --- | --- |
@@ -46,6 +46,8 @@ Copy `.env.example` and configure only the features you use. Nxsha catalog API c
 | `FIREBASE_CLIENT_EMAIL`, `FIREBASE_PRIVATE_KEY` | Optional Firebase service account credentials. Set both or neither. Newlines in the private key may be written as `\\n`. Application Default Credentials are used when these are omitted. |
 | `VITE_FIREBASE_API_KEY`, `VITE_FIREBASE_AUTH_DOMAIN`, `VITE_FIREBASE_PROJECT_ID`, `VITE_FIREBASE_APP_ID`, `VITE_FIREBASE_STORAGE_BUCKET`, `VITE_FIREBASE_MESSAGING_SENDER_ID` | Public Firebase web SDK configuration used by the existing frontend. These are build-time Vite variables, not Admin credentials. |
 | `GEMINI_API_KEY` | Optional server-side Gemini analysis, recommendations, and live voice companion. |
+| `TMDB_API_READ_ACCESS_TOKEN` | Server-only TMDB API v3 Read Access Token sent as `Authorization: Bearer …`. Required for live movie and TV metadata. Never expose it to Vite/browser code. |
+| `TMDB_REQUEST_TIMEOUT_MS` | Optional TMDB request timeout in milliseconds; defaults to 8000 and is capped at 60000. |
 | `AUTHORIZED_MEDIA_SOURCES_JSON`, `AUTHORIZED_MEDIA_HOSTS` | Optional playback allowlist. Configure only sources CineTogether is authorized to play. Sources must use HTTPS (HTTP is allowed only for local development), match the allowlisted host, and end in `.mp4` or `.m3u8` for direct playback. External links use manual sync. |
 | `DATABASE_SSL_REJECT_UNAUTHORIZED`, `SQL_ADMIN_USER`, `SQL_ADMIN_PASSWORD`, `APP_URL`, `DISABLE_HMR` | Optional TLS, migration-role, application URL, and local development settings. |
 
@@ -57,7 +59,8 @@ Drizzle schema definitions are in [`src/db/schema.ts`](src/db/schema.ts). The da
 
 - `profiles` — Firebase UID, email, display name, theme, preferences, timestamps.
 - `media_items` — catalog metadata; no playback URLs.
-- `nxsha_catalog_cache` — JSON catalog responses keyed by a digest, with refresh and expiry timestamps. Only use for responses obtained through an authorized Nxsha catalog integration.
+- `nxsha_catalog_cache` — legacy cache table retained for compatibility; the TMDB integration does not read or write it.
+- `tmdb_catalog_cache` — TMDB JSON API payloads keyed by a SHA-256 digest, with refresh and expiry timestamps. Short TTLs are used for search/list data and longer TTLs for details and genres.
 - `watchlists` and `watchlist_items` — per-user saved titles with uniqueness constraints.
 - `watch_rooms` and `room_members` — room configuration, host, status, membership, connection and ban state.
 - `playback_states` — one authoritative state per room, including revision and position.
@@ -107,12 +110,17 @@ All routes below are under `/api`. Successful responses are JSON; errors use `{ 
 | Method and path | Access | Purpose |
 | --- | --- | --- |
 | `GET /health` | Public | PostgreSQL readiness. Returns 503 when the database is unavailable. |
-| `GET /health/catalog` | Public | Nxsha catalog API availability. Returns 503 while official catalog API access is unavailable; documented player embed support is reported separately. |
+| `GET /health/catalog`, `GET /catalog/status` | Public | TMDB metadata token configuration status. Returns 503 when the server token is missing. Reports Nxsha playback as a separate provider. |
 | `POST /auth/guest-session` | Public, rate limited | Creates a signed 24-hour guest session. Body: `{ "displayName": "..." }`. |
-| `GET /catalog/feed?section=...&page=...&pageSize=...` | Public | Nxsha-only feed contract for movie, TV, anime, categories, trending, and pagination. Returns unexpired PostgreSQL cache data; returns 503 when cache is missing/expired and the official Nxsha API cannot refresh it. |
-| `GET /catalog/search?q=...&type=...&page=...` | Public | Nxsha-only search contract. No TMDB or other provider fallback. |
-| `GET /catalog/:providerId`, `/catalog/:providerId/seasons`, `/catalog/:providerId/seasons/:season/episodes` | Public | Cached Nxsha details, seasons, and episode data keyed by the native Nxsha provider ID. No Nxsha ID is converted to a TMDb/IMDb ID. |
-| `GET /nxsha/feed?tab=...`, `GET /nxsha/search?q=...`, `GET /nxsha/tv/:providerId/seasons` | Public | Legacy aliases to the Nxsha-only cached contract. No undocumented Nxsha requests are made. |
+| `GET /catalog/movies/popular?page=…`, `/catalog/movies/trending?window=day\|week`, `/catalog/movies/top-rated`, `/catalog/movies/now-playing`, `/catalog/movies/upcoming` | Public, rate limited | TMDB movie lists. Responses include `provider`, `state`, `items`, and pagination fields. |
+| `GET /catalog/movies/discover?page=…&genre=…&year=…` | Public, rate limited | TMDB movie discovery with validated genre ID and release year filters. |
+| `GET /catalog/movies/search?q=…&page=…&year=…` | Public, rate limited | TMDB movie search. Query length is 1–120 characters. |
+| `GET /catalog/movies/:tmdbId`, `/catalog/movies/:tmdbId/recommendations?page=…` | Public, rate limited | TMDB movie detail or recommendation list. IDs must be positive numeric TMDB IDs. |
+| `GET /catalog/genres/movie`, `/catalog/genres/tv` | Public, rate limited | TMDB genre lists used by discovery filters. |
+| `GET /catalog/tv/popular`, `/catalog/tv/trending?window=day\|week`, `/catalog/tv/discover`, `/catalog/tv/search` | Public, rate limited | TMDB TV lists, TV search, and genre/year discovery. |
+| `GET /catalog/tv/:tmdbId`, `/catalog/tv/:tmdbId/seasons`, `/catalog/tv/:tmdbId/seasons/:seasonNumber`, `/catalog/tv/:tmdbId/seasons/:seasonNumber/episodes` | Public, rate limited | TMDB TV details and season/episode metadata. The two season routes return the same season payload for compatibility. |
+| `GET /catalog/feed?section=…&page=…`, `GET /catalog/search?q=…&type=movie\|tv\|all&page=…` | Public, rate limited | Compatibility contracts backed only by TMDB. `section` supports movie, tv, trending, tv-trending, top-rated, now-playing, upcoming, and all. Anime is not a separate TMDB catalog and is not fabricated. |
+| `GET /catalog/:providerId`, `/catalog/:providerId/seasons`, `/catalog/:providerId/seasons/:season/episodes` | Public, rate limited | Compatibility detail routes accept IDs scoped as `tmdb:movie:<id>` or `tmdb:tv:<id>`. |
 | `GET /media/availability/:id?season=...&episode=...` | Public | Reports `metadata-only`, `synced-ready`, or `external-watch`; only configured authorized sources are playable. |
 | `GET /party/rooms` | Public | Lists active public rooms. |
 | `POST /party/rooms` | Firebase or guest | Creates a room and returns a room access token. |
@@ -122,19 +130,27 @@ All routes below are under `/api`. Successful responses are JSON; errors use `{ 
 | `GET /watch-history?limit=...`, `POST /watch-history`, `PATCH /watch-history/:sessionId` | Firebase | Reads history, records a session, and updates owned playback progress. `POST /sessions/record` remains as a compatibility alias. |
 | `POST /gemini/analyze`, `/gemini/quick-recap`, `/gemini/recommend` | Public, rate limited | Optional Gemini features; return 503 when no server key is configured. |
 
+### Catalog contract migration
+
+The former `/nxsha/feed`, `/nxsha/search`, and `/nxsha/tv/:providerId/seasons` catalog routes were removed because they represented an undocumented Nxsha catalog API. Clients should use `/catalog/movies/*`, `/catalog/tv/*`, `/catalog/genres/:mediaType`, or the TMDB-backed compatibility routes `/catalog/feed` and `/catalog/search`. Generic details and season routes now require an explicitly namespaced `tmdb:movie:<id>` or `tmdb:tv:<id>` identifier; the backend does not reinterpret provider IDs. User, watchlist, history, room, and WebSocket APIs are unchanged.
+
 ### WebSocket protocol
 
 Connect to `/ws/party` or `/ws/live` on the same origin. Send `{ "type": "auth", "token": "..." }` first. Party clients then send `room:join` with the room code and room access token returned by the room API. The server sends an authoritative `room:state` snapshot after joining and after persisted updates. Playback messages are revision checked; only the host can control playback unless collaborative controls are enabled. Messages are bounded and rate limited. Clients should reconnect with a new connection, authenticate again, verify/join the room again, and use the returned snapshot as current state. A heartbeat removes dead connections and disconnected members are marked offline.
 
-Playback availability is checked separately from catalog metadata. Only configured, allowlisted authorized MP4/HLS sources or explicitly configured external links can be presented as available. External provider links use manual synchronization. The server does not proxy streams or fabricate source URLs.
+TMDB supplies metadata only. Artwork URLs use TMDB image paths. Catalog results are never treated as playable: playback availability is checked separately and requires a configured, allowlisted authorized MP4/HLS source or explicitly configured external link. External sources use manual synchronization. The server does not proxy streams or derive a playback URL from a TMDB ID. TMDB cache writes are additive and do not alter user, watchlist, history, room, or playback data.
 
-## Nxsha integration status
+TMDB catalog pagination accepts pages 1–500. Movie and TV `discover` routes accept `genre` as a positive TMDB genre ID and `year` as a 4-digit year. Search accepts `q`/`query`, requires 1–120 characters, and supports a page parameter. TMDB 429 responses preserve `Retry-After`; timeouts, missing/invalid tokens, and upstream errors return explicit JSON errors.
 
-Nxsha is the sole intended provider for movie, TV, and anime discovery. The public [Nxsha Embed documentation](https://web.nxsha.space/embed) documents `/embed/movie/{tmdb_or_imdb_id}` and `/embed/tv/{tmdb_or_imdb_id}/{season}/{episode}` player routes, plus the `server`, `one_server`, `sub`, `lang`, `disable_dl_button`, and `disable_app_ad` player options. It also documents `/dl/movie/...` and `/dl/tv/...` download routes. Those are player/download integration methods, not a catalog API. The app constructs a player route only from a TMDb or IMDb identifier actually supplied in metadata; Nxsha's native catalog identifier stays separate. A documented route does not verify playback availability. The public [Nxsha Terms of Use](https://nxsha.app/terms-of-use) prohibit scraping, redistribution, and reverse engineering.
+### TMDB attribution
 
-No official public catalog API contract was found for discovery feeds, search, categories, trending, title details, seasons, or episodes. The `/api/*` URLs formerly used by the app were undocumented and have been removed. Accordingly, **none of those catalog discovery features is live** until Nxsha grants API access and supplies documentation. The API returns an explicit unavailable state and does not substitute TMDB or another provider. Support contact is still pending; no API response, credentials, or schema are available to implement against.
+The app displays the TMDB logo and required notice in its About and Credits footer. The metadata API, images, genres, ratings, and identifiers remain TMDB-supplied data. See [TMDB's official attribution requirements](https://developer.themoviedb.org/docs/faq).
 
-The additive `nxsha_catalog_cache` migration and TTL-aware repository methods are ready to cache an authorized catalog response in PostgreSQL. The cache is not populated until an official adapter can be implemented. Existing `media_items`, accounts, watchlists, watch history, and Watch Party data are left untouched. No production database migration was run.
+## Catalog and playback separation
+
+TMDB is the metadata provider for movie and TV discovery. The backend calls official TMDB v3 list, search, details, recommendations, genre, TV season, and episode endpoints. It sends the server-only bearer token, caches upstream JSON in `tmdb_catalog_cache`, and normalizes provider IDs as `tmdb:movie:<id>` / `tmdb:tv:<id>`. The legacy `nxsha_catalog_cache` table remains untouched and is not used by the TMDB integration.
+
+Metadata records contain no synthesized playback links. Nxsha playback stays a separate integration: an embed is used only when a playback integration explicitly supplies embed and watch URLs. Otherwise the result remains metadata-only. Configured MP4/HLS or external sources are separately validated by the existing allowlist and availability contract. A TMDB ID or availability in TMDB never proves playback.
 
 ## Tests and verification
 
@@ -145,24 +161,14 @@ npm test
 npm audit --omit=dev --audit-level=moderate
 ```
 
-The unit and HTTP tests cover token signing, playback-source validation, private-route authorization, guest sessions, metadata-only availability, and health behavior. The PostgreSQL migration, repository, and WebSocket persistence tests are skipped unless `TEST_DATABASE_URL` points to a dedicated disposable database whose name contains `test`, and `CINETEST_DATABASE_ALLOW_WRITE=true` is set. Apply migrations to that database first. The integration tests create uniquely named test rows and remove them afterward. Do not point `TEST_DATABASE_URL` at a production database.
+The TMDB service and HTTP route tests use mocked TMDB responses and cover the v3 list/search/details/recommendations/genre/TV-season routes, Bearer auth, pagination and filters, image URLs, cache expiry, missing credentials, rate limits, timeouts, and malformed responses. They do not verify a live TMDB token. Other unit and HTTP tests cover token signing, playback-source validation, private-route authorization, guest sessions, metadata-only availability, and health behavior. The PostgreSQL migration, repository, and WebSocket persistence tests are skipped unless `TEST_DATABASE_URL` points to a dedicated disposable database whose name contains `test`, and `CINETEST_DATABASE_ALLOW_WRITE=true` is set. Apply migrations to that database first. The integration tests create uniquely named test rows and remove them afterward. Do not point `TEST_DATABASE_URL` at a production database.
 
 The reviewed lockfile has no production advisories under `npm audit --omit=dev`. The full audit still reports four moderate advisories in Drizzle Kit's development-only legacy esbuild config loader; Drizzle Kit is not loaded by the production server or the `db:migrate` runner. No forced downgrade was applied.
 
-## Render deployment
+## Preview deployment
 
-For the existing Render web service:
-
-1. Keep the service on the `codex/backend-database` PR branch until review and merge; do not point the frontend branch at this backend branch without agreeing on the API contract.
-2. Set the runtime to Node 24. Render reads `.node-version` or `NODE_VERSION`; use Node 24.22.1 or newer.
-3. Set the build command to `npm ci && npm run build` and the start command to `npm start`.
-4. Set the health check path to `/api/health`.
-5. Configure `DATABASE_URL`, `AUTH_TOKEN_SECRET`, the Firebase Admin credentials (or application credentials), and any optional Gemini/media-source variables in Render’s environment settings. Use the Render PostgreSQL internal URL when the services share a region/network. Set `DATABASE_SSL=require` when the selected database connection requires TLS.
-6. Run `npm run db:migrate` as a pre-deploy/release command before the new server version starts. If the existing Render plan does not provide a pre-deploy command, run the migration once as a controlled release step; avoid concurrent migration runs from multiple web instances.
-7. Confirm the deployment logs show the service listening on `0.0.0.0` and verify `/api/health` returns HTTP 200 with `database: "connected"`. Also verify an authenticated user flow and a room WebSocket before treating the deployment as ready.
-
-Render’s current [Blueprint reference](https://render.com/docs/blueprint-spec), [Node runtime guide](https://render.com/docs/language-support), and [deploy guide](https://render.com/docs/deploys) describe service commands, Node selection, pre-deploy commands, and health checks. No deployment has been performed by this branch.
+Use the PR preview service for `antigravity/frontend-redesign`; do not edit or deploy the production Render service for this change. Configure `TMDB_API_READ_ACCESS_TOKEN` only in the preview service’s server environment. Use a disposable preview PostgreSQL database, run `npm run db:migrate` only against that preview database if the cache migration is pending, and test `/api/health/catalog`, popular/search movie routes, TV routes, and playback availability. Do not point preview at the production database. The service build/start commands are `npm ci && npm run build` and `npm start`; the health path is `/api/health`. If PR previews are not enabled, an owner can configure a separate preview service without changing production. A deployment is not considered verified until the preview URL and its API responses are checked.
 
 ## Branch workflow
 
-Backend and database work belongs on `codex/backend-database`. Antigravity frontend changes should remain on its own branch; agree on the API contract before merging the branches. This PR targets `main` and does not deploy the application.
+This integration updates the existing `antigravity/frontend-redesign` branch/PR #3 to keep the frontend API contract together. PR #2 (`codex/backend-database`) and PR #3 must remain open; do not merge either PR as part of this work. No production deployment or production migration is authorized.

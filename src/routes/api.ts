@@ -20,13 +20,11 @@ import {
 import { requireActor, requireAuth, type AuthRequest } from '../middleware/auth.ts';
 import { createGuestSession, createRoomAccessToken } from '../security/tokens.ts';
 import { getAuthorizedMediaSource } from '../services/mediaSources.ts';
-import {
-  checkCatalogHealth,
-  NXSHA_CATALOG_UNAVAILABLE,
-  nxshaCatalogCacheKey,
-  readNxshaCatalogCache,
-} from '../services/catalogService.ts';
+import { TmdbCatalogError, tmdbCatalogService } from '../services/catalogService.ts';
+import type { createTmdbCatalogService } from '../services/catalogService.ts';
 import type { MediaItem } from '../types.ts';
+
+type CatalogService = ReturnType<typeof createTmdbCatalogService>;
 
 class HttpError extends Error {
   constructor(public status: number, message: string) {
@@ -105,6 +103,16 @@ function withPlaybackAvailability(item: MediaItem): MediaItem {
     playbackStatus: source ? (source.type === 'external' ? 'external-watch' : 'synced-ready') : 'metadata-only',
     authorizedSourceType: source?.type,
     authorizedProviderUrl: source?.type === 'external' ? source.url : undefined,
+    authorizedPlaybackSource: source && source.type !== 'external' ? source.url : undefined,
+    streamUrl: source?.type === 'mp4' ? source.url : undefined,
+    hlsUrl: source?.type === 'hls' ? source.url : undefined,
+    sourceAvailability: source ? (source.type === 'external' ? 'external-only' : 'verified') : 'unavailable',
+    playbackType: source ? (source.type === 'external' ? 'external-watch' : 'synced-studio') : 'metadata-only',
+    playbackCapability: {
+      canSync: source?.type === 'mp4' || source?.type === 'hls',
+      canEmbed: false,
+      requiresExternalWatch: source?.type === 'external',
+    },
   };
 }
 
@@ -124,18 +132,47 @@ function addPlaybackAvailability(payload: unknown): unknown {
   return decorate(payload);
 }
 
-async function cachedCatalogResponse(res: Response, cacheKey: string): Promise<unknown> {
-  try {
-    const cached = await readNxshaCatalogCache<unknown>(cacheKey);
-    if (cached !== null) return res.json(addPlaybackAvailability(cached));
-  } catch {
-    // A database/cache failure never triggers an undocumented provider request or a catalog fallback.
-  }
-  return res.status(503).json({
-    ...NXSHA_CATALOG_UNAVAILABLE,
-    items: [],
-    cache: 'miss_or_expired',
-  });
+function catalogPage(req: Request): number {
+  const raw = req.query.page;
+  if (raw === undefined) return 1;
+  const value = Number(raw);
+  if (!Number.isSafeInteger(value) || value < 1 || value > 500) throw new HttpError(400, 'page must be an integer from 1 to 500.');
+  return value;
+}
+
+function catalogWindow(req: Request): 'day' | 'week' {
+  const value = req.query.window === undefined ? 'week' : req.query.window;
+  if (value !== 'day' && value !== 'week') throw new HttpError(400, 'window must be day or week.');
+  return value;
+}
+
+function catalogFilter(req: Request): { genre?: number; year?: number } {
+  const genreRaw = req.query.genre;
+  const yearRaw = req.query.year;
+  const genre = genreRaw === undefined || genreRaw === '' ? undefined : Number(genreRaw);
+  const year = yearRaw === undefined || yearRaw === '' ? undefined : Number(yearRaw);
+  if (genre !== undefined && (!Number.isSafeInteger(genre) || genre <= 0)) throw new HttpError(400, 'genre must be a positive TMDB genre ID.');
+  if (year !== undefined && (!Number.isSafeInteger(year) || year < 1000 || year > 9999)) throw new HttpError(400, 'year must be an integer from 1000 to 9999.');
+  return { genre, year };
+}
+
+function catalogSearchQuery(req: Request): string {
+  return text(
+    typeof req.query.q === 'string' ? req.query.q : typeof req.query.query === 'string' ? req.query.query : '',
+    'q',
+    120,
+  );
+}
+
+function catalogId(value: string): number {
+  if (!/^[1-9]\d{0,9}$/.test(value)) throw new HttpError(400, 'A numeric TMDB ID is required.');
+  const id = Number(value);
+  if (!Number.isSafeInteger(id)) throw new HttpError(400, 'A numeric TMDB ID is required.');
+  return id;
+}
+
+function catalogResponse(payload: unknown): unknown {
+  return addPlaybackAvailability(payload);
 }
 
 function userId(req: AuthRequest): string {
@@ -148,11 +185,12 @@ function aiClient(): GoogleGenAI | null {
   return apiKey && apiKey !== 'MY_GEMINI_API_KEY' ? new GoogleGenAI({ apiKey }) : null;
 }
 
-export function createApiRouter(): Router {
+export function createApiRouter(catalog: CatalogService = tmdbCatalogService): Router {
   const router = Router();
   const authRateLimit = rateLimit(60_000, 30);
   const roomRateLimit = rateLimit(60_000, 20);
   const aiRateLimit = rateLimit(60_000, 15);
+  const catalogRateLimit = rateLimit(60_000, 120);
 
   router.get('/health', asyncRoute(async (_req, res) => {
     const database = await checkDatabaseConnection();
@@ -163,8 +201,8 @@ export function createApiRouter(): Router {
     });
   }));
   router.get('/health/catalog', asyncRoute(async (_req, res) => {
-    const health = await checkCatalogHealth();
-    return res.status(503).json(health);
+    const health = catalog.health();
+    return res.status(health.configured ? 200 : 503).json(health);
   }));
 
   router.post('/auth/guest-session', authRateLimit, asyncRoute(async (req, res) => {
@@ -172,48 +210,160 @@ export function createApiRouter(): Router {
     res.status(201).json({ data: createGuestSession(name) });
   }));
 
-  router.get('/catalog/feed', asyncRoute(async (req, res) => {
-    const section = String(req.query.section || 'all').slice(0, 32).toLowerCase();
-    const page = Math.max(1, Math.min(500, Number(req.query.page) || 1));
-    const pageSize = Math.max(1, Math.min(100, Number(req.query.pageSize) || 24));
-    return cachedCatalogResponse(res, nxshaCatalogCacheKey('feed', { section, page, pageSize }));
+  router.get('/catalog/status', catalogRateLimit, (_req, res) => {
+    const health = catalog.health();
+    return res.status(health.configured ? 200 : 503).json(health);
+  });
+
+  router.get('/catalog/genres/:mediaType', catalogRateLimit, asyncRoute(async (req, res) => {
+    const mediaType = req.params.mediaType;
+    if (mediaType !== 'movie' && mediaType !== 'tv') throw new HttpError(400, 'mediaType must be movie or tv.');
+    return res.json(catalogResponse(await catalog.genres(mediaType)));
   }));
 
-  router.get('/catalog/search', asyncRoute(async (req, res) => {
-    const query = text(typeof req.query.q === 'string' ? req.query.q : '', 'q', 120);
-    const typeParam = ['movie', 'tv', 'anime', 'all'].includes(String(req.query.type)) ? String(req.query.type) : 'all';
-    const page = Math.max(1, Math.min(100, Number(req.query.page) || 1));
-    return cachedCatalogResponse(res, nxshaCatalogCacheKey('search', { query, type: typeParam, page }));
+  router.get('/catalog/movies/popular', catalogRateLimit, asyncRoute(async (req, res) => {
+    const page = catalogPage(req);
+    const filters = catalogFilter(req);
+    const payload = filters.genre || filters.year
+      ? await catalog.discoverMovies(page, filters)
+      : await catalog.popularMovies(page);
+    return res.json(catalogResponse(payload));
   }));
-  router.get('/nxsha/feed', asyncRoute(async (req, res) => {
-    const section = String(req.query.tab || req.query.tabKey || 'all').slice(0, 32).toLowerCase();
-    const page = Math.max(1, Math.min(500, Number(req.query.page) || 1));
-    const pageSize = Math.max(1, Math.min(100, Number(req.query.pageSize) || 24));
-    return cachedCatalogResponse(res, nxshaCatalogCacheKey('feed', { section, page, pageSize }));
+  router.get('/catalog/movies/top-rated', catalogRateLimit, asyncRoute(async (req, res) => {
+    return res.json(catalogResponse(await catalog.topRatedMovies(catalogPage(req))));
   }));
-  router.get('/nxsha/search', asyncRoute(async (req, res) => {
-    const query = text(typeof req.query.q === 'string' ? req.query.q : '', 'q', 120);
-    const typeParam = ['movie', 'tv', 'anime', 'all'].includes(String(req.query.type)) ? String(req.query.type) : 'all';
-    const page = Math.max(1, Math.min(100, Number(req.query.page) || 1));
-    return cachedCatalogResponse(res, nxshaCatalogCacheKey('search', { query, type: typeParam, page }));
+  router.get('/catalog/movies/now-playing', catalogRateLimit, asyncRoute(async (req, res) => {
+    return res.json(catalogResponse(await catalog.nowPlayingMovies(catalogPage(req))));
   }));
-  router.get('/catalog/:providerId/seasons/:seasonNumber/episodes', asyncRoute(async (req, res) => {
-    const seasonNumber = Number(req.params.seasonNumber);
-    if (!Number.isSafeInteger(seasonNumber) || seasonNumber < 0) throw new HttpError(400, 'Season number is invalid.');
-    const providerId = text(req.params.providerId, 'providerId', 160);
-    return cachedCatalogResponse(res, nxshaCatalogCacheKey('episodes', { providerId, seasonNumber }));
+  router.get('/catalog/movies/upcoming', catalogRateLimit, asyncRoute(async (req, res) => {
+    return res.json(catalogResponse(await catalog.upcomingMovies(catalogPage(req))));
   }));
-  router.get('/catalog/:providerId/seasons', asyncRoute(async (req, res) => {
-    const providerId = text(req.params.providerId, 'providerId', 160);
-    return cachedCatalogResponse(res, nxshaCatalogCacheKey('seasons', { providerId }));
+  router.get('/catalog/movies/trending', catalogRateLimit, asyncRoute(async (req, res) => {
+    return res.json(catalogResponse(await catalog.trendingMovies(catalogPage(req), catalogWindow(req))));
   }));
-  router.get('/catalog/:providerId', asyncRoute(async (req, res) => {
-    const providerId = text(req.params.providerId, 'providerId', 160);
-    return cachedCatalogResponse(res, nxshaCatalogCacheKey('details', { providerId }));
+  router.get('/catalog/movies/discover', catalogRateLimit, asyncRoute(async (req, res) => {
+    return res.json(catalogResponse(await catalog.discoverMovies(catalogPage(req), catalogFilter(req))));
   }));
-  router.get('/nxsha/tv/:providerId/seasons', asyncRoute(async (req, res) => {
-    const providerId = text(req.params.providerId, 'providerId', 160);
-    return cachedCatalogResponse(res, nxshaCatalogCacheKey('seasons', { providerId }));
+  router.get('/catalog/movies/search', catalogRateLimit, asyncRoute(async (req, res) => {
+    const filters = catalogFilter(req);
+    return res.json(catalogResponse(await catalog.searchMovies(catalogSearchQuery(req), catalogPage(req), filters.year)));
+  }));
+  router.get('/catalog/movies/:id/recommendations', catalogRateLimit, asyncRoute(async (req, res) => {
+    return res.json(catalogResponse(await catalog.movieRecommendations(catalogId(req.params.id), catalogPage(req))));
+  }));
+  router.get('/catalog/movies/:id', catalogRateLimit, asyncRoute(async (req, res) => {
+    return res.json(catalogResponse(await catalog.movieDetails(catalogId(req.params.id))));
+  }));
+
+  router.get('/catalog/tv/popular', catalogRateLimit, asyncRoute(async (req, res) => {
+    const page = catalogPage(req);
+    const filters = catalogFilter(req);
+    const payload = filters.genre || filters.year
+      ? await catalog.discoverTv(page, filters)
+      : await catalog.popularTv(page);
+    return res.json(catalogResponse(payload));
+  }));
+  router.get('/catalog/tv/trending', catalogRateLimit, asyncRoute(async (req, res) => {
+    return res.json(catalogResponse(await catalog.trendingTv(catalogPage(req), catalogWindow(req))));
+  }));
+  router.get('/catalog/tv/discover', catalogRateLimit, asyncRoute(async (req, res) => {
+    return res.json(catalogResponse(await catalog.discoverTv(catalogPage(req), catalogFilter(req))));
+  }));
+  router.get('/catalog/tv/search', catalogRateLimit, asyncRoute(async (req, res) => {
+    const filters = catalogFilter(req);
+    return res.json(catalogResponse(await catalog.searchTv(catalogSearchQuery(req), catalogPage(req), filters.year)));
+  }));
+  router.get('/catalog/tv/:id/seasons/:seasonNumber/episodes', catalogRateLimit, asyncRoute(async (req, res) => {
+    const season = Number(req.params.seasonNumber);
+    return res.json({ provider: 'TMDB', state: 'available', season: await catalog.tvSeason(catalogId(req.params.id), season) });
+  }));
+  router.get('/catalog/tv/:id/seasons/:seasonNumber', catalogRateLimit, asyncRoute(async (req, res) => {
+    const season = Number(req.params.seasonNumber);
+    return res.json({ provider: 'TMDB', state: 'available', season: await catalog.tvSeason(catalogId(req.params.id), season) });
+  }));
+  router.get('/catalog/tv/:id/seasons', catalogRateLimit, asyncRoute(async (req, res) => {
+    return res.json(catalogResponse(await catalog.tvDetails(catalogId(req.params.id))));
+  }));
+  router.get('/catalog/tv/:id', catalogRateLimit, asyncRoute(async (req, res) => {
+    return res.json(catalogResponse(await catalog.tvDetails(catalogId(req.params.id))));
+  }));
+
+  router.get('/catalog/feed', catalogRateLimit, asyncRoute(async (req, res) => {
+    const section = String(req.query.section || 'all').toLowerCase();
+    const page = catalogPage(req);
+    const filters = catalogFilter(req);
+    if (section === 'movie' || section === 'movies') {
+      const payload = filters.genre || filters.year ? await catalog.discoverMovies(page, filters) : await catalog.popularMovies(page);
+      return res.json(catalogResponse(payload));
+    }
+    if (section === 'tv' || section === 'series') {
+      const payload = filters.genre || filters.year ? await catalog.discoverTv(page, filters) : await catalog.popularTv(page);
+      return res.json(catalogResponse(payload));
+    }
+    if (section === 'trending') return res.json(catalogResponse(await catalog.trendingMovies(page)));
+    if (section === 'top-rated') return res.json(catalogResponse(await catalog.topRatedMovies(page)));
+    if (section === 'now-playing') return res.json(catalogResponse(await catalog.nowPlayingMovies(page)));
+    if (section === 'upcoming') return res.json(catalogResponse(await catalog.upcomingMovies(page)));
+    if (section === 'tv-trending') return res.json(catalogResponse(await catalog.trendingTv(page)));
+    if (section === 'anime') {
+      throw new HttpError(422, 'TMDB does not expose a separate anime catalog. Browse movie or TV metadata instead.');
+    }
+    if (section !== 'all') throw new HttpError(400, 'section must be all, movie, tv, trending, top-rated, now-playing, upcoming, tv-trending, or anime.');
+    const [movies, shows] = await Promise.all([catalog.popularMovies(page), catalog.popularTv(page)]);
+    return res.json(catalogResponse({
+      provider: 'TMDB',
+      state: 'available',
+      items: [...movies.items, ...shows.items],
+      page,
+      totalPages: Math.max(movies.totalPages, shows.totalPages),
+      totalResults: movies.totalResults + shows.totalResults,
+      hasMore: movies.hasMore || shows.hasMore,
+    }));
+  }));
+
+  router.get('/catalog/search', catalogRateLimit, asyncRoute(async (req, res) => {
+    const query = catalogSearchQuery(req);
+    const page = catalogPage(req);
+    const filters = catalogFilter(req);
+    const type = req.query.type === undefined ? 'all' : String(req.query.type);
+    if (type === 'movie') return res.json(catalogResponse(await catalog.searchMovies(query, page, filters.year)));
+    if (type === 'tv') return res.json(catalogResponse(await catalog.searchTv(query, page, filters.year)));
+    if (type !== 'all') throw new HttpError(400, 'type must be movie, tv, or all.');
+    const [movies, shows] = await Promise.all([
+      catalog.searchMovies(query, page, filters.year),
+      catalog.searchTv(query, page, filters.year),
+    ]);
+    const items = [...movies.items, ...shows.items];
+    return res.json(catalogResponse({
+      provider: 'TMDB',
+      state: 'available',
+      items,
+      page,
+      totalPages: Math.max(movies.totalPages, shows.totalPages),
+      totalResults: movies.totalResults + shows.totalResults,
+      hasMore: movies.hasMore || shows.hasMore,
+    }));
+  }));
+
+  // Backwards-compatible metadata route; numeric IDs must be explicitly scoped to TMDB.
+  router.get('/catalog/:providerId/seasons/:seasonNumber/episodes', catalogRateLimit, asyncRoute(async (req, res) => {
+    const match = /^tmdb:tv:([1-9]\d{0,9})$/.exec(req.params.providerId);
+    if (!match) throw new HttpError(400, 'Use a TMDB TV ID for season and episode metadata.');
+    const season = Number(req.params.seasonNumber);
+    return res.json({ provider: 'TMDB', state: 'available', season: await catalog.tvSeason(Number(match[1]), season) });
+  }));
+  router.get('/catalog/:providerId/seasons', catalogRateLimit, asyncRoute(async (req, res) => {
+    const match = /^tmdb:tv:([1-9]\d{0,9})$/.exec(req.params.providerId);
+    if (!match) throw new HttpError(400, 'Use a TMDB TV ID for series season metadata.');
+    return res.json(catalogResponse(await catalog.tvDetails(Number(match[1]))));
+  }));
+  router.get('/catalog/:providerId', catalogRateLimit, asyncRoute(async (req, res) => {
+    const match = /^tmdb:(movie|tv):([1-9]\d{0,9})$/.exec(req.params.providerId);
+    if (!match) throw new HttpError(400, 'Use a TMDB-scoped ID for catalog details.');
+    const payload = match[1] === 'movie'
+      ? await catalog.movieDetails(Number(match[2]))
+      : await catalog.tvDetails(Number(match[2]));
+    return res.json(catalogResponse(payload));
   }));
 
   router.get('/media/availability/:id', asyncRoute(async (req, res) => {
@@ -372,6 +522,15 @@ export function createApiRouter(): Router {
 
   router.use((error: unknown, _req: Request, res: Response, _next: NextFunction) => {
     if (res.headersSent) return;
+    if (error instanceof TmdbCatalogError) {
+      if (error.retryAfterSeconds !== undefined) res.setHeader('Retry-After', String(error.retryAfterSeconds));
+      return res.status(error.status).json({
+        provider: 'TMDB',
+        state: error.status >= 500 ? 'unavailable' : 'error',
+        code: error.code,
+        error: error.message,
+      });
+    }
     if (error instanceof HttpError) return res.status(error.status).json({ error: error.message });
     const pgCode = (error as { code?: string })?.code;
     if (pgCode === '23505') return res.status(409).json({ error: 'That value already exists.' });

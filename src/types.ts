@@ -41,7 +41,7 @@ export type RoomThemeId =
   | 'velvet-crimson'
   | 'aurora-emerald';
 
-export type PlayerProviderType = 'synced-studio' | 'nxsha-embed';
+export type PlayerProviderType = 'synced-studio' | 'nxsha-embed' | 'metadata-only';
 
 export type PlaybackCapabilityStatus =
   | 'synced-ready'
@@ -56,11 +56,11 @@ export interface TvEpisodeItem {
   episodeNumber: number;
   title: string;
   overview: string;
-  durationMinutes: number;
+  durationMinutes?: number;
   airDate: string;
   stillUrl?: string;
-  nxshaEmbedUrl: string;
-  nxshaWatchUrl: string;
+  nxshaEmbedUrl?: string;
+  nxshaWatchUrl?: string;
 }
 
 export interface TvSeasonDetail {
@@ -82,8 +82,8 @@ export interface MediaItem {
   platform: PlatformOrigin;
   releaseDate: string;
   year: string;
-  rating: number;
-  durationMinutes: number;
+  rating?: number;
+  durationMinutes?: number;
   seasons?: number;
   episodes?: number;
   genres: string[];
@@ -107,8 +107,9 @@ export interface MediaItem {
   };
   nxshaWatchUrl?: string;
   nxshaEmbedUrl?: string;
-  streamUrl: string;
+  streamUrl?: string;
   hlsUrl?: string;
+  genreIds?: number[];
   accentColor: string;
   secondaryColor: string;
   director: string;

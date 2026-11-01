@@ -65,6 +65,19 @@ export const nxshaCatalogCache = pgTable(
   (table) => [index('nxsha_catalog_cache_expires_idx').on(table.expiresAt)]
 );
 
+// TMDB catalog responses are cached separately from the legacy Nxsha cache and
+// from user-owned media records. Refreshes never overwrite user or party data.
+export const tmdbCatalogCache = pgTable(
+  'tmdb_catalog_cache',
+  {
+    cacheKey: text('cache_key').primaryKey(),
+    payload: jsonb('payload').notNull(),
+    refreshedAt: timestamp('refreshed_at').defaultNow().notNull(),
+    expiresAt: timestamp('expires_at').notNull(),
+  },
+  (table) => [index('tmdb_catalog_cache_expires_idx').on(table.expiresAt)]
+);
+
 // 3. watch_rooms
 export const watchRooms = pgTable(
   'watch_rooms',

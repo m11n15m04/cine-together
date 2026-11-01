@@ -101,7 +101,7 @@ export const MovieCard: React.FC<MovieCardProps> = ({
         </div>
 
         <div className="absolute top-2 right-2 px-2 py-0.5 rounded-md bg-slate-950/85 backdrop-blur-md border border-white/10 text-[11px] font-mono text-amber-400 font-semibold shadow">
-          ★ {item.rating.toFixed(1)}
+          {item.rating === undefined ? 'Rating unavailable' : `★ ${item.rating.toFixed(1)}`}
         </div>
 
         {/* Subtle Scrim gradient */}
