@@ -17,6 +17,7 @@ import { MediaPoster } from './MediaPoster';
 
 interface MovieCardProps {
   item: MediaItem;
+  rank?: number;
   isInWatchlist: boolean;
   onOpenDetails: (item: MediaItem) => void;
   onStartWatching: (item: MediaItem) => void;
@@ -27,6 +28,7 @@ interface MovieCardProps {
 
 export const MovieCard: React.FC<MovieCardProps> = ({
   item,
+  rank,
   isInWatchlist,
   onOpenDetails,
   onStartWatching,
@@ -100,6 +102,12 @@ export const MovieCard: React.FC<MovieCardProps> = ({
           )}
         </div>
 
+        {rank !== undefined && (
+          <div aria-label={`Ranked number ${rank}`} className="pointer-events-none absolute bottom-1 left-2 z-10 select-none text-7xl font-black leading-none tracking-tighter text-white/90 drop-shadow-[0_4px_8px_rgba(0,0,0,0.9)] sm:text-8xl">
+            {rank}
+          </div>
+        )}
+
         <div className="absolute top-2 right-2 px-2 py-0.5 rounded-md bg-slate-950/85 backdrop-blur-md border border-white/10 text-[11px] font-mono text-amber-400 font-semibold shadow">
           {item.rating === undefined ? 'Rating unavailable' : `★ ${item.rating.toFixed(1)}`}
         </div>
@@ -145,10 +153,10 @@ export const MovieCard: React.FC<MovieCardProps> = ({
                 type="button"
                 onClick={() => onOpenDetails(item)}
                 className="flex-1 py-1.5 px-2.5 rounded-xl bg-slate-800 hover:bg-slate-700 text-slate-200 text-xs font-medium inline-flex items-center justify-center gap-1.5 transition-colors border border-slate-700"
-                title="View details and release information"
+                title="Open the cinematic player window"
               >
-                <Info className="w-3.5 h-3.5 text-slate-400" />
-                <span>Details</span>
+                <Play className="w-3.5 h-3.5 fill-current" />
+                <span>Open player</span>
               </button>
             ) : item.playbackStatus === 'external-watch' ? (
               <button
@@ -225,6 +233,7 @@ interface HorizontalPosterCarouselProps {
   icon?: React.ReactNode;
   badge?: string;
   items: MediaItem[];
+  ranked?: boolean;
   likedIds: string[];
   isLoading?: boolean;
   onOpenDetails: (item: MediaItem) => void;
@@ -241,6 +250,7 @@ export const HorizontalPosterCarousel: React.FC<HorizontalPosterCarouselProps> =
   icon,
   badge,
   items,
+  ranked = false,
   likedIds,
   isLoading = false,
   onOpenDetails,
@@ -343,10 +353,11 @@ export const HorizontalPosterCarousel: React.FC<HorizontalPosterCarouselProps> =
             </div>
           ))
         ) : (
-          items.map((item) => (
+          items.map((item, index) => (
             <MovieCard
               key={`${item.id}-${item.tmdbId}`}
               item={item}
+              rank={ranked ? index + 1 : undefined}
               isInWatchlist={likedIds.includes(item.id)}
               onOpenDetails={onOpenDetails}
               onStartWatching={onStartWatching}

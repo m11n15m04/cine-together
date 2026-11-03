@@ -10,6 +10,7 @@ export interface NxshaPlaybackRequest {
 }
 
 interface NxshaWatchModalProps {
+  testAccessEnabled: boolean;
   request: NxshaPlaybackRequest;
   language: string;
   onLanguageChange: (language: string) => void;
@@ -22,9 +23,10 @@ const LANGUAGE_OPTIONS = [
   ['french', 'French'],
 ] as const;
 
-type PlayerFrameStatus = 'connecting' | 'responded' | 'unavailable';
+type PlayerFrameStatus = 'connecting' | 'responded' | 'unavailable' | 'locked';
 
 export const NxshaWatchModal: React.FC<NxshaWatchModalProps> = ({
+  testAccessEnabled,
   request,
   language,
   onLanguageChange,
@@ -41,7 +43,7 @@ export const NxshaWatchModal: React.FC<NxshaWatchModalProps> = ({
   const mediaType = request.item.mediaType === 'movie' || request.item.mediaType === 'tv'
     ? request.item.mediaType
     : null;
-  const embedUrl = mediaType
+  const embedUrl = testAccessEnabled && mediaType
     ? buildNxshaEmbedUrl({
         tmdbId: request.item.tmdbId,
         mediaType,
@@ -55,7 +57,7 @@ export const NxshaWatchModal: React.FC<NxshaWatchModalProps> = ({
     const previousOverflow = document.body.style.overflow;
     document.body.style.overflow = 'hidden';
     closeButtonRef.current?.focus();
-    setFrameStatus(embedUrl ? 'connecting' : 'unavailable');
+    setFrameStatus(!testAccessEnabled ? 'locked' : embedUrl ? 'connecting' : 'unavailable');
     if (embedUrl) {
       timeoutRef.current = setTimeout(() => setFrameStatus('unavailable'), 15_000);
     }
@@ -64,7 +66,7 @@ export const NxshaWatchModal: React.FC<NxshaWatchModalProps> = ({
       if (timeoutRef.current) clearTimeout(timeoutRef.current);
       timeoutRef.current = null;
     };
-  }, [embedUrl]);
+  }, [embedUrl, testAccessEnabled]);
 
   useEffect(() => {
     const frame = iframeRef.current;
@@ -190,7 +192,15 @@ export const NxshaWatchModal: React.FC<NxshaWatchModalProps> = ({
               className="absolute inset-0 h-full w-full border-0"
             />
           ) : null}
-          {!embedUrl && (
+          {!testAccessEnabled && (
+            <div role="alert" className="absolute inset-0 flex flex-col items-center justify-center gap-3 px-6 text-center">
+              <p className="text-xl font-display font-bold text-white">Private player access required</p>
+              <p className="max-w-lg text-sm leading-relaxed text-slate-300">
+                Sign in with the Firebase account authorized for this private test. No external player has been loaded.
+              </p>
+            </div>
+          )}
+          {testAccessEnabled && !embedUrl && (
             <div role="alert" className="absolute inset-0 flex flex-col items-center justify-center gap-3 px-6 text-center">
               <p className="text-sm font-semibold text-white">Player request is unavailable</p>
               <p className="max-w-lg text-xs leading-relaxed text-slate-300">

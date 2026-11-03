@@ -928,10 +928,13 @@ export default function App() {
   };
 
   const handleOpenMediaDetail = (item: MediaItem) => {
-    if (nxshaEmbedTestEnabled && (item.mediaType === 'movie' || item.mediaType === 'tv')) {
+    if (item.mediaType === 'movie' || item.mediaType === 'tv') {
       setSelectedMedia(item);
       setIsTheaterOpen(false);
-      setNxshaPlaybackRequest({ item });
+      setNxshaPlaybackRequest({
+        item,
+        ...(item.mediaType === 'tv' ? { season: 1, episode: 1 } : {}),
+      });
       return;
     }
     setSelectedMedia(item);
@@ -1304,143 +1307,93 @@ export default function App() {
           activeTab === 'tv' ||
           activeTab === 'anime') && (
           <div className="space-y-12">
-            {/* Large Cinematic Hero Banner */}
-            {!isTheaterOpen && !isProviderUnavailable && catalog.length > 0 && selectedMedia && (
+            {/* Streaming-service spotlight: poster-first, minimal metadata, direct watch action */}
+            {!isTheaterOpen && !isProviderUnavailable && activeTab === 'home' && catalog.length > 0 && selectedMedia && (
               <section
-                aria-label="Featured Release Spotlight"
-                className="grid grid-cols-1 lg:grid-cols-12 gap-6 items-stretch bg-gradient-to-br from-slate-900 via-[#121026] to-slate-950 border border-violet-500/20 rounded-3xl overflow-hidden shadow-2xl relative"
+                aria-label="Featured movie"
+                className="relative isolate min-h-[320px] sm:min-h-[400px] overflow-hidden rounded-3xl border border-violet-500/20 bg-slate-950 shadow-2xl"
               >
-                <div className="lg:col-span-7 p-6 sm:p-10 flex flex-col justify-between space-y-6 z-10">
-                  <div className="space-y-4">
-                    <div className="flex flex-wrap items-center gap-2 text-xs font-mono tabular-nums">
-                      <span className="px-2.5 py-0.5 rounded-full bg-violet-500/20 text-violet-300 border border-violet-500/30 font-semibold">
-                        {selectedMedia.platform}
-                      </span>
-                      <span className="text-amber-400 font-semibold">
-                        {selectedMedia.rating === undefined ? 'Rating unavailable' : '★ ' + selectedMedia.rating.toFixed(1)}
-                      </span>
+                <MediaPoster
+                  item={selectedMedia}
+                  variant="backdrop"
+                  priority
+                  className="absolute inset-0 h-full w-full object-cover opacity-65"
+                />
+                <div className="absolute inset-0 bg-gradient-to-r from-[#070913] via-[#070913]/85 to-[#070913]/10" />
+                <div className="absolute inset-0 bg-gradient-to-t from-[#070913] via-transparent to-[#070913]/10" />
+                <div className="relative z-10 flex min-h-[320px] sm:min-h-[400px] items-end justify-between gap-6 p-6 sm:p-10">
+                  <div className="max-w-2xl space-y-4">
+                    <div className="flex flex-wrap items-center gap-2 text-[11px] font-mono uppercase tracking-[0.16em]">
+                      <span className="rounded-full border border-violet-400/30 bg-violet-500/20 px-3 py-1 text-violet-200">Featured</span>
+                      <span className="text-slate-300">{selectedMedia.mediaType === 'tv' ? 'Series' : 'Movie'}</span>
                       <span className="text-slate-500">·</span>
                       <span className="text-slate-300">{selectedMedia.year}</span>
-                      <span className="text-slate-500">·</span>
-                      <span className="text-slate-300">{selectedMedia.language}</span>
-                      <span className="text-slate-500">·</span>
-                      <span className="text-rose-300">
-                        {selectedMedia.coupleScore ? '❤️ ' + selectedMedia.coupleScore + '% Couple Match' : null}
-                      </span>
-                    </div>
-
-                    <h1 className="text-3xl sm:text-4xl lg:text-5xl font-display font-bold text-white tracking-tight">
-                      {selectedMedia.title}
-                    </h1>
-
-                    <p className="text-sm sm:text-base text-slate-300 leading-relaxed max-w-2xl">
-                      {selectedMedia.description}
-                    </p>
-
-                    <div className="text-xs text-slate-400">
-                      <span>Directed by {selectedMedia.director}</span>
-                      <span className="mx-2">·</span>
-                      <span>Starring {selectedMedia.cast.join(', ')}</span>
-                      <span className="mx-2">·</span>
-                      <span>{selectedMedia.genres.join(' / ')}</span>
-                    </div>
-                  </div>
-
-                  {/* Hero CTAs */}
-                  <div className="flex flex-wrap items-center gap-3 pt-2">
-                    <button
-                      type="button"
-                      disabled={
-                        !(nxshaEmbedTestEnabled && (selectedMedia.mediaType === 'movie' || selectedMedia.mediaType === 'tv')) &&
-                        selectedMedia.playbackStatus !== 'synced-ready' &&
-                        selectedMedia.playbackStatus !== 'external-watch'
-                      }
-                      onClick={() => handleStartWatching(selectedMedia)}
-                      className="inline-flex items-center gap-2 px-5 py-3 text-xs sm:text-sm font-semibold bg-white disabled:bg-slate-800 disabled:text-slate-500 hover:bg-slate-200 text-slate-950 rounded-xl transition-all whitespace-nowrap shrink-0 shadow-lg hover:scale-105 active:scale-95"
-                    >
-                      <Play className="w-4 h-4 fill-current" />
-                      <span>{
-                        nxshaEmbedTestEnabled && (selectedMedia.mediaType === 'movie' || selectedMedia.mediaType === 'tv')
-                          ? 'Try Nxsha Player'
-                          : selectedMedia.playbackStatus === 'synced-ready' || selectedMedia.playbackStatus === 'external-watch'
-                            ? 'Watch Solo'
-                            : 'Playback Unavailable'
-                      }</span>
-                    </button>
-
-                    <button
-                      type="button"
-                      onClick={() => {
-                        setActiveRoomMode('couple');
-                        setActiveRoomCode('LOVE-2026');
-                        navigateToTab('couple-room', '/room/couple/LOVE-2026');
-                      }}
-                      className="inline-flex items-center gap-2 px-4 py-3 text-xs sm:text-sm font-semibold bg-gradient-to-r from-rose-500 to-pink-600 hover:from-rose-400 hover:to-pink-500 text-white rounded-xl transition-all whitespace-nowrap shrink-0 shadow-lg hover:scale-105 active:scale-95"
-                    >
-                      <Heart className="w-4 h-4 fill-current" />
-                      <span>Couple Cinema ❤️</span>
-                    </button>
-
-                    <button
-                      type="button"
-                      onClick={() => {
-                        setActiveRoomMode('group');
-                        setActiveRoomCode('CLUB-4096');
-                        navigateToTab('group-room', '/room/group/CLUB-4096');
-                      }}
-                      className="inline-flex items-center gap-2 px-4 py-3 text-xs sm:text-sm font-semibold bg-gradient-to-r from-violet-600 to-indigo-600 hover:from-violet-500 hover:to-indigo-500 text-white rounded-xl transition-all whitespace-nowrap shrink-0 shadow-lg hover:scale-105 active:scale-95"
-                    >
-                      <Users className="w-4 h-4" />
-                      <span>Group Cinema 🎉</span>
-                    </button>
-
-                    <button
-                      type="button"
-                      onClick={() => handleToggleWatchlist(selectedMedia)}
-                      className="inline-flex items-center gap-1.5 px-3.5 py-3 text-xs font-medium bg-slate-900 hover:bg-slate-800 text-slate-200 border border-slate-700 rounded-xl transition-colors whitespace-nowrap shrink-0"
-                    >
-                      {likedIds.includes(selectedMedia.id) ? (
+                      {typeof selectedMedia.rating === 'number' && (
                         <>
-                          <Check className="w-4 h-4 text-emerald-400" />
-                          <span>In My List</span>
-                        </>
-                      ) : (
-                        <>
-                          <Plus className="w-4 h-4" />
-                          <span>My List</span>
+                          <span className="text-slate-500">·</span>
+                          <span className="text-amber-300">★ {selectedMedia.rating.toFixed(1)}</span>
                         </>
                       )}
-                    </button>
-
-                    <button
-                      type="button"
-                      onClick={() => handleOpenMediaDetail(selectedMedia)}
-                      className="px-3.5 py-3 text-xs font-medium bg-slate-950/80 hover:bg-slate-800 text-slate-300 border border-slate-800 rounded-xl transition-colors"
-                    >
-                      Details
-                    </button>
+                    </div>
+                    <h1 className="text-3xl font-display font-extrabold tracking-tight text-white drop-shadow-lg sm:text-5xl lg:text-6xl">
+                      {selectedMedia.title}
+                    </h1>
+                    <p className="text-xs font-medium text-slate-300 sm:text-sm">
+                      {selectedMedia.genres.slice(0, 2).join('  ·  ')}
+                      {selectedMedia.language ? `  ·  ${selectedMedia.language.toUpperCase()}` : ''}
+                    </p>
+                    <div className="flex flex-wrap items-center gap-2.5 pt-1">
+                      <button
+                        type="button"
+                        onClick={() => handleOpenMediaDetail(selectedMedia)}
+                        className="inline-flex items-center gap-2 rounded-xl bg-white px-5 py-3 text-sm font-bold text-slate-950 shadow-lg transition hover:scale-[1.02] hover:bg-violet-100 active:scale-95"
+                      >
+                        <Play className="h-4 w-4 fill-current" />
+                        Play now
+                      </button>
+                      <button
+                        type="button"
+                        onClick={() => {
+                          setActiveRoomMode('couple');
+                          setActiveRoomCode('LOVE-2026');
+                          navigateToTab('couple-room', '/room/couple/LOVE-2026');
+                        }}
+                        className="inline-flex items-center gap-2 rounded-xl border border-white/15 bg-slate-950/65 px-4 py-3 text-sm font-semibold text-white backdrop-blur transition hover:bg-rose-600/80"
+                      >
+                        <Heart className="h-4 w-4 fill-current" />
+                        Couple Cinema
+                      </button>
+                      <button
+                        type="button"
+                        onClick={() => {
+                          setActiveRoomMode('group');
+                          setActiveRoomCode('CLUB-4096');
+                          navigateToTab('group-room', '/room/group/CLUB-4096');
+                        }}
+                        className="inline-flex items-center gap-2 rounded-xl border border-white/15 bg-slate-950/65 px-4 py-3 text-sm font-semibold text-white backdrop-blur transition hover:bg-violet-600/80"
+                      >
+                        <Users className="h-4 w-4" />
+                        Group Cinema
+                      </button>
+                      <button
+                        type="button"
+                        onClick={() => handleToggleWatchlist(selectedMedia)}
+                        aria-label={likedIds.includes(selectedMedia.id) ? 'Remove from My List' : 'Add to My List'}
+                        className="inline-flex items-center justify-center rounded-xl border border-white/15 bg-slate-950/65 p-3 text-white backdrop-blur transition hover:border-violet-300"
+                      >
+                        {likedIds.includes(selectedMedia.id) ? <Check className="h-4 w-4 text-emerald-300" /> : <Plus className="h-4 w-4" />}
+                      </button>
+                    </div>
                   </div>
-                </div>
-
-                <div className="lg:col-span-5 relative min-h-[280px] lg:min-h-full overflow-hidden">
-                  <MediaPoster
-                    item={selectedMedia}
-                    variant="backdrop"
-                    priority
-                    className="w-full h-full object-cover"
-                  />
-                  <div className="absolute inset-0 bg-gradient-to-t from-slate-950 via-transparent to-transparent pointer-events-none lg:hidden" />
-
-                  {/* Spotlight Carousel Navigation */}
                   {spotlightItems.length > 1 && (
-                    <div className="absolute bottom-4 right-4 z-20 flex items-center gap-2 bg-slate-950/85 backdrop-blur-md px-3 py-1.5 rounded-full border border-white/10 shadow-lg">
+                    <div className="absolute bottom-4 right-4 z-20 flex items-center gap-2 rounded-full border border-white/10 bg-slate-950/80 px-3 py-1.5 shadow-lg backdrop-blur">
                       <button
                         type="button"
                         onClick={handlePrevSpotlight}
-                        aria-label="Previous featured spotlight"
-                        className="p-1 rounded-full hover:bg-white/10 text-slate-300 hover:text-white transition-colors"
+                        aria-label="Previous featured title"
+                        className="rounded-full p-1 text-slate-300 transition hover:bg-white/10 hover:text-white"
                       >
-                        <ChevronLeft className="w-3.5 h-3.5" />
+                        <ChevronLeft className="h-4 w-4" />
                       </button>
                       <div className="flex items-center gap-1.5">
                         {spotlightItems.map((item) => (
@@ -1448,22 +1401,18 @@ export default function App() {
                             key={item.id}
                             type="button"
                             onClick={() => setSelectedMedia(item)}
-                            aria-label={`Switch spotlight to ${item.title}`}
-                            className={`h-1.5 rounded-full transition-all ${
-                              item.id === selectedMedia.id
-                                ? 'w-5 bg-violet-400'
-                                : 'w-1.5 bg-slate-600 hover:bg-slate-400'
-                            }`}
+                            aria-label={`Feature ${item.title}`}
+                            className={`h-1.5 rounded-full transition-all ${item.id === selectedMedia.id ? 'w-5 bg-violet-400' : 'w-1.5 bg-slate-600 hover:bg-slate-400'}`}
                           />
                         ))}
                       </div>
                       <button
                         type="button"
                         onClick={handleNextSpotlight}
-                        aria-label="Next featured spotlight"
-                        className="p-1 rounded-full hover:bg-white/10 text-slate-300 hover:text-white transition-colors"
+                        aria-label="Next featured title"
+                        className="rounded-full p-1 text-slate-300 transition hover:bg-white/10 hover:text-white"
                       >
-                        <ChevronRight className="w-3.5 h-3.5" />
+                        <ChevronRight className="h-4 w-4" />
                       </button>
                     </div>
                   )}
@@ -1580,6 +1529,35 @@ export default function App() {
             {/* HOMEPAGE THEMATIC HORIZONTAL CAROUSELS (when on Home, not searching, and catalog has items) */}
             {activeTab === 'home' && !searchQuery.trim() && !isProviderUnavailable && catalog.length > 0 && (
               <div className="space-y-10">
+                {/* Streaming discovery: ranked Top 10 from TMDB trending feed */}
+                <HorizontalPosterCarousel
+                  title="Top 10 Trending"
+                  subtitle="The ten most talked-about titles in the current TMDB trending feed"
+                  icon={<Flame className="w-5 h-5 text-amber-400" />}
+                  badge="TOP 10"
+                  ranked
+                  items={trendingMovies.slice(0, 10)}
+                  likedIds={likedIds}
+                  isLoading={trendingLoading}
+                  onOpenDetails={handleOpenMediaDetail}
+                  onStartWatching={handleStartWatching}
+                  onToggleWatchlist={handleToggleWatchlist}
+                  onStartCoupleParty={(item) => {
+                    setSelectedMedia(item);
+                    setActiveRoomMode('couple');
+                    navigateToTab('couple-room', '/room/couple/LOVE-2026');
+                  }}
+                  onStartGroupParty={(item) => {
+                    setSelectedMedia(item);
+                    setActiveRoomMode('group');
+                    navigateToTab('group-room', '/room/group/CLUB-4096');
+                  }}
+                  onViewAll={() => {
+                    setCategoryFilter('movie');
+                    navigateToTab('movies', '/movies');
+                  }}
+                />
+
                 {/* 3. Trending Movies */}
                 <HorizontalPosterCarousel
                   title="Trending Movies"
@@ -2788,6 +2766,7 @@ export default function App() {
 
       {nxshaPlaybackRequest && (
         <NxshaWatchModal
+          testAccessEnabled={nxshaEmbedTestEnabled}
           request={nxshaPlaybackRequest}
           language={nxshaPlayerLanguage}
           onLanguageChange={(language) => {
